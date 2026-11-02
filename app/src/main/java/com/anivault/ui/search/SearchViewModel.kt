@@ -99,7 +99,7 @@ class SearchViewModel @Inject constructor(
         lastAnimeResults = entries
         _uiState.value = SearchUiState.Success(
             results = entries.map { it.toResultItem() },
-            fallbackSource = null
+            fallbackSource = animeRepository.lastSearchSource
         )
     }
 

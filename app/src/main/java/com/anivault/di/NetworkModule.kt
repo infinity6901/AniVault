@@ -1,7 +1,6 @@
 package com.anivault.di
 
 import com.anivault.data.remote.cloudflare.CloudflareInterceptor
-import com.anivault.data.remote.scraper.JikanApiService
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -17,36 +16,6 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
-
-    // ── Plain client — Jikan (no Cloudflare bypass needed) ─────────────────
-    @Provides
-    @Singleton
-    @Named("jikan")
-    fun provideJikanClient(): OkHttpClient =
-        OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .addInterceptor(
-                HttpLoggingInterceptor().apply {
-                    level = HttpLoggingInterceptor.Level.BASIC
-                }
-            )
-            .build()
-
-    @Provides
-    @Singleton
-    @Named("jikanRetrofit")
-    fun provideJikanRetrofit(@Named("jikan") client: OkHttpClient): Retrofit =
-        Retrofit.Builder()
-            .baseUrl("https://api.jikan.moe/v4/")
-            .client(client)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-
-    @Provides
-    @Singleton
-    fun provideJikanApiService(@Named("jikanRetrofit") retrofit: Retrofit): JikanApiService =
-        retrofit.create(JikanApiService::class.java)
 
     // ── Cloudflare-bypassing client — hanime.tv (primary H-Vault source) ───
     @Provides

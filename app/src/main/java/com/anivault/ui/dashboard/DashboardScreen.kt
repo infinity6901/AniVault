@@ -49,6 +49,7 @@ import com.anivault.ui.theme.AppMode
 @Composable
 fun DashboardRoot(
     onSearchClick: (AppMode) -> Unit,
+    onSettingsClick: () -> Unit,
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -101,6 +102,7 @@ fun DashboardRoot(
             onSortSelect    = viewModel::setSortOrder,
             onLockHVault    = viewModel::lockHVault,
             onSearchClick   = onSearchClick,
+            onSettingsClick = onSettingsClick,
             onToggleSelect  = viewModel::toggleSelect,
             onLongPress     = viewModel::enterMultiSelectMode,
             onSelectAll     = viewModel::selectAll,
@@ -129,6 +131,7 @@ fun DashboardScreen(
     onSortSelect: (SortOrder) -> Unit,
     onLockHVault: () -> Unit,
     onSearchClick: (AppMode) -> Unit,
+    onSettingsClick: () -> Unit,
     onToggleSelect: (String) -> Unit,
     onLongPress: (String) -> Unit,
     onSelectAll: () -> Unit,
@@ -184,6 +187,7 @@ fun DashboardScreen(
                     onModeToggle  = onModeToggle,
                     onLockHVault  = onLockHVault,
                     onSearchClick = onSearchClick,
+                    onSettingsClick = onSettingsClick,
                     onSortClick   = { showSortDialog = true },
                     onExportPdf   = onExportPdf,
                     onExportDocx  = onExportDocx,
@@ -316,6 +320,7 @@ private fun DashboardTopBar(
     onModeToggle: (AppMode) -> Unit,
     onLockHVault: () -> Unit,
     onSearchClick: (AppMode) -> Unit,
+    onSettingsClick: () -> Unit,
     onSortClick: () -> Unit,
     onExportPdf: () -> Unit,
     onExportDocx: () -> Unit,
@@ -334,6 +339,9 @@ private fun DashboardTopBar(
         actions = {
             IconButton(onClick = { onSearchClick(currentMode) }) {
                 Icon(Icons.Default.Search, contentDescription = "Search", tint = accent)
+            }
+            IconButton(onClick = onSettingsClick) {
+                Icon(Icons.Default.Settings, contentDescription = "Settings / API sources", tint = accent)
             }
             IconButton(onClick = onSortClick) {
                 Icon(Icons.Default.Sort, contentDescription = "Sort", tint = accent)

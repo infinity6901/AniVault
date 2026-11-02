@@ -10,11 +10,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.anivault.ui.dashboard.DashboardRoot
 import com.anivault.ui.search.SearchRoot
+import com.anivault.ui.settings.ApiSourcesScreen
 import com.anivault.ui.theme.AppMode
 import dagger.hilt.android.AndroidEntryPoint
 
 private object Routes {
     const val DASHBOARD = "dashboard"
+    const val API_SOURCES = "api-sources"
     const val SEARCH    = "search/{mode}"   // mode = "ANIME" | "H_VAULT"
     fun search(mode: AppMode) = "search/${mode.name}"
 }
@@ -42,8 +44,13 @@ class MainActivity : FragmentActivity() {
                     DashboardRoot(
                         onSearchClick = { mode ->
                             navController.navigate(Routes.search(mode))
-                        }
+                        },
+                        onSettingsClick = { navController.navigate(Routes.API_SOURCES) }
                     )
+                }
+
+                composable(Routes.API_SOURCES) {
+                    ApiSourcesScreen(onBack = { navController.popBackStack() })
                 }
 
                 composable(Routes.SEARCH) { backStack ->

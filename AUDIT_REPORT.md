@@ -27,7 +27,7 @@
 5. **Search and biometric behavior**
    - A failed biometric match no longer clears the pending H-Vault unlock request; only a terminal authentication error does.
    - Search cancellation is rethrown instead of being displayed as a search error.
-   - The Jikan anime search defaults to `sfw=true`, keeping general anime search separate from the H-Vault.
+   - Anime metadata search now uses configurable providers with AniList GraphQL and Jikan-compatible REST adapters. The discontinued api.jikan.moe endpoint is no longer hard-coded.
 
 6. **Release shrinker dependency**
    - Added an explicit JSpecify dependency (`org.jspecify:jspecify:1.0.0`). The supplied CI report showed R8 failing because Jsoup referenced `org.jspecify.annotations.NullMarked`, which was missing from the release classpath.
@@ -41,3 +41,13 @@
 ## Remaining security note
 
 H-Vault's biometric prompt is an application access gate; the Room database itself is not encrypted at rest. Do not treat the database as cryptographically protected against someone with filesystem/root access. Database encryption would require a separate migration plan.
+
+
+## API source redesign (2026-11-03)
+- Removed the hard-coded Jikan Retrofit service, response models, and `api.jikan.moe` base URL.
+- Added local API-source configuration with enable/disable, priority ordering, custom HTTPS endpoints, and MAL Client ID support.
+- Added fallback search: enabled sources are tried in priority order when a request fails or returns no results.
+- Added AniList GraphQL and MyAnimeList v2 adapters plus a Jikan-compatible REST adapter for compatible endpoints.
+- Added Settings → API Sources screen and generated AniVault launcher artwork.
+- Tenrai is listed as a configurable source but disabled by default because its response schema has not been verified as Jikan-compatible. Enable it only if it supports the configured adapter or add a dedicated adapter for its documented API.
+- Build verification still required in a network-enabled Android/Gradle environment.
