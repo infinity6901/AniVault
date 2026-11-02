@@ -4,13 +4,17 @@ Workflow: `.github/workflows/android-build-smoke-test.yml`
 
 ## What it does
 
-1. Uses JDK 17, Android SDK, and Gradle 8.7.
-2. Builds `:app:assembleDebug` and `:app:assembleRelease`.
-3. Runs `:app:testDebugUnitTest` and `:app:lintDebug`.
-4. Signs both APKs using the Android-generated debug signing key. The FOSS release is minified but is **not** a Play Store release and should not be used for a production update channel.
-5. Boots an API 34 Android emulator, installs each APK separately, starts `com.anivault/.MainActivity`, and checks that the app process remains alive and the activity appears in the activity dump.
-6. Uploads APKs, checksums, Gradle logs, emulator logs, Logcat, lint results, unit-test reports, and a Markdown report as one Actions artifact.
-7. On build failures, includes common Gradle error signatures and the final 100 lines of the build log in the report. On smoke-test failures, captures Logcat and activity diagnostics.
+1. Sets up JDK 17, the Android SDK and the Gradle wrapper (8.7), and creates/prints the Android **debug signing key**.
+2. Builds `:app:assembleDebug` and `:app:assembleRelease` (the FOSS release: minified, signed with the debug key).
+3. `scripts/verify-apks.sh` checks both APKs are validly signed **with the debug key** and records SHA-256, size and package info.
+4. Runs `:app:testDebugUnitTest` and `:app:lintDebug` separately, so a lint/test failure does not hide runtime problems.
+5. Boots an API 34 emulator (KVM-accelerated) and runs `scripts/smoke-test.sh` on each APK: install, launch `MainActivity`, process alive after 10s, no crash/ANR in Logcat, screenshot + UI dump, then 120 seeded monkey inputs with crash/ANR detection.
+6. `scripts/ci-report.sh` writes `ci-report/REPORT.md` and the run's Summary page, and emits error annotations.
+7. Uploads one artifact with the APKs, report, logs, Logcat, screenshots, R8 mapping, unit-test and lint reports. The run fails if any stage failed.
+
+## Failure causes
+
+When a stage fails, the Summary page and `REPORT.md` contain a "Failure cause" section: Gradle's `What went wrong` block and compiler/resolution/R8 errors, the failing verification line, lint/test failures, or the smoke-test reason plus the crash stack from Logcat. The same text is shown as an error annotation on the run. Full logs are in `diagnostics/`.
 
 ## Where to get outputs
 
