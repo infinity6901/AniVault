@@ -43,6 +43,19 @@ if [[ -s "$REPORT_DIR/APK-METADATA.md" ]]; then
 fi
 
 failed=0
+for kv in ${SETUP_OUTCOMES:-}; do
+  if [[ "${kv#*=}" == failure ]]; then
+    failed=1
+    { echo; echo "## ❌ Failure cause: setup step \`${kv%%=*}\` failed"
+      echo "The job stopped before building anything. Open the failed step in the run log for the error (usually a network/download problem fetching tools)."; } >> "$R"
+    annotate "Setup failed: ${kv%%=*}" "A setup step failed before the build started. Open that step in the run log."
+  fi
+done
+if [[ $failed -eq 0 && "${JOB_STATUS:-}" == failure && "${BUILD_OUTCOME:-}" != failure && "${VERIFY_OUTCOME:-}" != failure && "${CHECKS_OUTCOME:-}" != failure && "${SMOKE_OUTCOME:-}" != failure ]]; then
+  failed=1
+  { echo; echo "## ❌ Failure cause: an earlier step failed"; echo "The job failed outside the build/verify/test/smoke stages. See the failed step in the run log."; } >> "$R"
+  annotate "Job failed" "A step failed outside the build/verify/test/smoke stages. See the run log."
+fi
 if [[ "${BUILD_OUTCOME:-}" == failure ]]; then
   failed=1; cause="$(gradle_cause "$DIAG/gradle-build.log")"
   { echo; echo "## ❌ Failure cause: Gradle build"; echo '```text'; echo "$cause"; echo '```'

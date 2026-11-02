@@ -32,15 +32,23 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
+        id: jdk
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # The ubuntu-latest image already ships the Android SDK (ANDROID_HOME) with
+      # licenses accepted; android-actions/setup-android was failing while fetching
+      # the remote package list, so it is not used. Print what is available instead.
+      - name: Show preinstalled Android SDK
+        id: sdk
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools"
 
       - name: Set up Gradle (wrapper version, with caching)
+        id: gradle
         uses: gradle/actions/setup-gradle@v4
 
       - name: Prepare folders
@@ -49,6 +57,7 @@ jobs:
       # The debug signing key is created explicitly so it is guaranteed to exist
       # and so its fingerprint can be checked against both APKs afterwards.
       - name: Ensure Android debug signing key
+        id: key
         run: |
           mkdir -p ~/.android
           if [ ! -f ~/.android/debug.keystore ]; then
@@ -114,6 +123,8 @@ jobs:
           VERIFY_OUTCOME: ${{ steps.verify.outcome }}
           CHECKS_OUTCOME: ${{ steps.checks.outcome }}
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          SETUP_OUTCOMES: "JDK=${{ steps.jdk.outcome }} Android-SDK=${{ steps.sdk.outcome }} Gradle=${{ steps.gradle.outcome }} Debug-key=${{ steps.key.outcome }}"
+          JOB_STATUS: ${{ job.status }}
         run: scripts/ci-report.sh
 
       - name: Upload APKs, report, logs and test results
@@ -134,10 +145,11 @@ jobs:
       - name: Fail the run if any stage failed
         if: always()
         env:
-          OUTCOMES: ${{ steps.build.outcome }} ${{ steps.verify.outcome }} ${{ steps.checks.outcome }} ${{ steps.smoke.outcome }}
+          OUTCOMES: ${{ steps.jdk.outcome }} ${{ steps.sdk.outcome }} ${{ steps.gradle.outcome }} ${{ steps.key.outcome }} ${{ steps.build.outcome }} ${{ steps.verify.outcome }} ${{ steps.checks.outcome }} ${{ steps.smoke.outcome }}
+          JOB_STATUS: ${{ job.status }}
         run: |
-          echo "Stage outcomes (build verify checks smoke): $OUTCOMES"
-          if [[ " $OUTCOMES " == *" failure "* ]]; then
+          echo "Outcomes: $OUTCOMES (job status so far: $JOB_STATUS)"
+          if [[ " $OUTCOMES " == *" failure "* || "$JOB_STATUS" == failure ]]; then
             echo '::error::One or more stages failed. See the run summary and ci-report/REPORT.md in the artifact for the cause.'
             exit 1
           fi
