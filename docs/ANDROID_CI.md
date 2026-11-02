@@ -10,7 +10,7 @@ Workflow: `.github/workflows/android-build-smoke-test.yml`
 4. Runs `:app:testDebugUnitTest` and `:app:lintDebug` separately, so a lint/test failure does not hide runtime problems.
 5. Boots an API 34 emulator (KVM-accelerated) and runs `scripts/smoke-test.sh` on each APK: install, launch `MainActivity`, process alive after 10s, no crash/ANR in Logcat, screenshot + UI dump, then 120 seeded monkey inputs with crash/ANR detection.
 6. `scripts/ci-report.sh` writes `ci-report/REPORT.md` and the run's Summary page, and emits error annotations.
-7. Uploads one artifact with the APKs, report, logs, Logcat, screenshots, R8 mapping, unit-test and lint reports. The run fails if any stage failed.
+7. Uploads two artifacts: `anivault-apks-<run>` (the APKs) and `anivault-reports-<run>` (report, logs, Logcat, screenshots, R8 mapping, unit-test and lint reports). The run fails if any stage failed.
 
 ## Failure causes
 
@@ -18,7 +18,7 @@ When a stage fails, the Summary page and `REPORT.md` contain a "Failure cause" s
 
 ## Where to get outputs
 
-Open the GitHub Actions run and download the `anivault-ci-<run number>` artifact. The report is `ci-report/REPORT.md`; build and emulator details are in `diagnostics/`.
+Open the GitHub Actions run and download `anivault-apks-<run number>` for the APKs or `anivault-reports-<run number>` for the reports. The report is `ci-report/REPORT.md`; build and emulator details are in `diagnostics/`.
 
 ## What the smoke test means
 
