@@ -105,6 +105,8 @@ dependencies {
     implementation(libs.retrofit)
     implementation(libs.retrofit.gson)
     implementation(libs.jsoup)
+    // Jsoup references JSpecify nullness annotations; include them for R8 release shrinking.
+    implementation(libs.jspecify)
 
     // ── Coroutines ─────────────────────────────────────────────────────────
     implementation(libs.coroutines.android)

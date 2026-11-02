@@ -29,15 +29,15 @@
    - Search cancellation is rethrown instead of being displayed as a search error.
    - The Jikan anime search defaults to `sfw=true`, keeping general anime search separate from the H-Vault.
 
+6. **Release shrinker dependency**
+   - Added an explicit JSpecify dependency (`org.jspecify:jspecify:1.0.0`). The supplied CI report showed R8 failing because Jsoup referenced `org.jspecify.annotations.NullMarked`, which was missing from the release classpath.
+
 ## Validation performed
 
-- Parsed all project XML resource/manifest files successfully.
-- Parsed the Gradle version catalog as TOML successfully.
-- Checked the Unix Gradle launcher syntax.
-- Inspected the Gradle dependency aliases used by the app module.
+- Parsed all project XML resource/manifest files successfully during the earlier static audit.
+- Added the JSpecify version and library alias to the Gradle version catalog and wired it into the app module.
+- Attempted `./gradlew --no-daemon :app:assembleDebug :app:assembleRelease` after the fix. The build could not start because this environment has no network access and Gradle 8.7 was not cached (`UnknownHostException: services.gradle.org`). This means the R8 fix is based on the reported missing-class diagnostic and has not yet been confirmed by a completed Android build.
 
-## Validation limitation / remaining security note
-
-A full Android Gradle compile/test could not be completed in this environment. The uploaded archive's wrapper JAR was a placeholder rather than the real Gradle wrapper, and the environment could not download a replacement distribution. The launcher now bootstraps Gradle 8.7 when run in an environment with network access, but the Android build still needs to be run in Android Studio or with Gradle available.
+## Remaining security note
 
 H-Vault's biometric prompt is an application access gate; the Room database itself is not encrypted at rest. Do not treat the database as cryptographically protected against someone with filesystem/root access. Database encryption would require a separate migration plan.
