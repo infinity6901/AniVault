@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AniVault</string>
+    <string name="mode_anime">Anime</string>
+    <string name="mode_hvault">H-Vault</string>
+    <string name="biometric_title">Unlock H-Vault</string>
+    <string name="biometric_subtitle">Authenticate to access H-Vault content</string>
+    <string name="biometric_cancel">Cancel</string>
+    <string name="stats_entries">Entries</string>
+    <string name="stats_watch_time">Watch Time</string>
+    <string name="stats_avg_rating">Avg Rating</string>
+    <string name="filter_all">All</string>
+    <string name="filter_watching">Watching</string>
+    <string name="filter_completed">Completed</string>
+    <string name="filter_plan">Plan</string>
+    <string name="filter_dropped">Dropped</string>
+    <string name="empty_anime">No anime tracked yet.\nSearch and add your first title!</string>
+    <string name="empty_hvault">H-Vault is empty.\nSearch and add entries.</string>
+    <string name="lock_hvault">Lock H-Vault</string>
+    <string name="search_hint">Search…</string>
+    <string name="pdf_export_title">AniVault Export</string>
+</resources>

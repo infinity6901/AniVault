@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Exclude the Room database and DataStore from auto-backup so that
+   sensitive H-Vault data is never uploaded to Google Drive.
+-->
+<full-backup-content>
+    <exclude domain="database" path="anivault.db" />
+    <exclude domain="database" path="anivault.db-shm" />
+    <exclude domain="database" path="anivault.db-wal" />
+    <exclude domain="file"     path="datastore/" />
+</full-backup-content>
