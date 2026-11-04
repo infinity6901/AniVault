@@ -20,6 +20,7 @@ env:
   REPORT_DIR: ci-report
   DIAG_DIR: diagnostics
   EMULATOR_API: '34'
+  ANDROID_USER_HOME: ${{ runner.temp }}/android-user-home/.android
 
 jobs:
   build-and-smoke-test:
@@ -59,14 +60,14 @@ jobs:
       - name: Ensure Android debug signing key
         id: key
         run: |
-          mkdir -p ~/.android
-          if [ ! -f ~/.android/debug.keystore ]; then
-            keytool -genkeypair -v -keystore ~/.android/debug.keystore \
+          mkdir -p "$ANDROID_USER_HOME"
+          if [ ! -f "$ANDROID_USER_HOME/debug.keystore" ]; then
+            keytool -genkeypair -v -keystore "$ANDROID_USER_HOME/debug.keystore" \
               -storepass android -keypass android -alias androiddebugkey \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
-          keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey | grep -E 'SHA256|Owner'
+          keytool -list -v -keystore "$ANDROID_USER_HOME/debug.keystore" -storepass android -alias androiddebugkey | grep -E 'SHA256|Owner'
 
       - name: Build debug and FOSS release APKs
         id: build
@@ -161,38 +162,3 @@ jobs:
             echo '::error::One or more stages failed. See the run summary and ci-report/REPORT.md in the artifact for the cause.'
             exit 1
           fi
-
-  # Only runs for version tags, and only if the build, verification, tests and
-  # emulator smoke test all passed (the job above fails otherwise).
-  release:
-    name: Publish GitHub Release
-    needs: build-and-smoke-test
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check tag matches app versionName
-        run: |
-          name="$(sed -n 's/.*versionName *= *"\(.*\)".*/\1/p' app/build.gradle.kts | head -1)"
-          if [[ "v$name" != "$GITHUB_REF_NAME" ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match versionName $name in app/build.gradle.kts"; exit 1
-          fi
-
-      - name: Download APKs
-        uses: actions/download-artifact@v4
-        with:
-          name: anivault-apks-${{ github.run_number }}
-          path: apks
-
-      - name: Create release and attach APKs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          ls -l apks
-          notes='Debug-key-signed builds for direct installation (not for Google Play). Uninstall any earlier build signed with a different key before installing. Each APK passed the CI emulator smoke test (install, launch, no crash/ANR).'
-          gh release create "$GITHUB_REF_NAME" apks/*.apk \
-            --repo "$GITHUB_REPOSITORY" --title "AniVault $GITHUB_REF_NAME" \
-            --notes "$notes" --generate-notes --verify-tag

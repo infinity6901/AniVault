@@ -95,6 +95,7 @@ class DocxExportManager @Inject constructor(
         val completed = entries.filter { it.status == WatchStatus.COMPLETED }
         val plan      = entries.filter { it.status == WatchStatus.PLAN_TO_WATCH }
         val dropped   = entries.filter { it.status == WatchStatus.DROPPED }
+        val onHold    = entries.filter { it.status == WatchStatus.ON_HOLD }
         val totalMins = entries.sumOf { it.watchedEpisodes.toLong() * it.durationMinutes }
         val avgRating = entries.filter { it.rating > 0 }.map { it.rating }.average()
 
@@ -106,7 +107,7 @@ class DocxExportManager @Inject constructor(
             appendPara("Total Entries: ${entries.size}   |   Watch Time: ${totalMins / 60}h   |   Avg Rating: ${if (avgRating.isNaN()) "—" else "%.1f".format(avgRating)}")
             appendPara("")
 
-            for ((label, list) in listOf("Watching" to watching, "Completed" to completed, "Plan to Watch" to plan, "Dropped" to dropped)) {
+            for ((label, list) in listOf("Watching" to watching, "Completed" to completed, "On Hold" to onHold, "Plan to Watch" to plan, "Dropped" to dropped)) {
                 if (list.isEmpty()) continue
                 appendPara("$label (${list.size})", heading = true)
                 for (e in list) {

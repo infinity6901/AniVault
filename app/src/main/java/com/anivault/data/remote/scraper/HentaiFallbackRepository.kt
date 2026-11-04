@@ -1,6 +1,6 @@
 package com.anivault.data.remote.scraper
 
-import android.util.Log
+import com.anivault.core.Sanitizer
 import com.anivault.data.local.dao.HVaultDao
 import com.anivault.data.local.entity.HVaultEntry
 import com.anivault.data.local.model.WatchStatus
@@ -28,10 +28,6 @@ class HentaiFallbackRepository @Inject constructor(
     private val nhentai:    NhentaiApiRepository,
     private val hVaultDao:  HVaultDao
 ) {
-    companion object {
-        private const val TAG = "HentaiFallback"
-    }
-
     // ── Vault observation (source-agnostic) ────────────────────────────────
 
     fun observeAll(): Flow<List<HVaultEntry>> = hVaultDao.observeAll()
@@ -44,49 +40,47 @@ class HentaiFallbackRepository @Inject constructor(
     suspend fun search(query: String, page: Int = 1): SearchResult =
         withContext(Dispatchers.IO) {
 
+            val failures = mutableListOf<String>()
             // 1. Primary — hanime.tv
             val primaryResults = try {
                 primary.search(query, page)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.w(TAG, "Primary (${primary.sourceName}) failed: ${error.message}")
+                failures += "${primary.sourceName}: ${Sanitizer.clean(error.message, 100).ifBlank { "request failed" }}"
                 emptyList()
             }
 
             if (primaryResults.isNotEmpty()) {
-                Log.d(TAG, "${primary.sourceName}: ${primaryResults.size} results")
                 return@withContext SearchResult(primaryResults, primary.sourceName, false)
             }
 
             // 2. Fallback 1 — watchhentai.net
-            Log.i(TAG, "Primary empty — trying ${fallback.sourceName}")
             val fallbackResults = try {
                 fallback.search(query, page)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.w(TAG, "${fallback.sourceName} failed: ${error.message}")
+                failures += "${fallback.sourceName}: ${Sanitizer.clean(error.message, 100).ifBlank { "request failed" }}"
                 emptyList()
             }
 
             if (fallbackResults.isNotEmpty()) {
-                Log.d(TAG, "${fallback.sourceName}: ${fallbackResults.size} results")
                 return@withContext SearchResult(fallbackResults, fallback.sourceName, true)
             }
 
             // 3. Fallback 2 — nhentai.net JSON API
-            Log.i(TAG, "Fallback-1 empty — trying ${nhentai.sourceName}")
             val nhentaiResults = try {
                 nhentai.search(query, page)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.w(TAG, "${nhentai.sourceName} failed: ${error.message}")
+                failures += "${nhentai.sourceName}: ${Sanitizer.clean(error.message, 100).ifBlank { "request failed" }}"
                 emptyList()
             }
-
-            Log.d(TAG, "${nhentai.sourceName}: ${nhentaiResults.size} results")
+            if (nhentaiResults.isEmpty() && failures.isNotEmpty()) {
+                throw IllegalStateException("H-Vault search could not reach its sources. ${failures.joinToString(" • ")}")
+            }
             SearchResult(
                 entries      = nhentaiResults,
                 sourceName   = nhentai.sourceName,
@@ -109,7 +103,6 @@ class HentaiFallbackRepository @Inject constructor(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
-                    Log.w(TAG, "${src.sourceName} detail failed: ${error.message}")
                     null
                 }
                 if (result != null) return@withContext result

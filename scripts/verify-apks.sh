@@ -3,7 +3,7 @@
 # Usage: scripts/verify-apks.sh <debug.apk> <release.apk>   Writes ci-report/APK-METADATA.md
 set -euo pipefail
 REPORT_DIR="${REPORT_DIR:-ci-report}"; mkdir -p "$REPORT_DIR"
-KS="${DEBUG_KEYSTORE:-$HOME/.android/debug.keystore}"
+KS="${DEBUG_KEYSTORE:-${ANDROID_USER_HOME:-$HOME/.android}/debug.keystore}"
 BT="$(ls -d "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"/build-tools/* | sort -V | tail -1)"
 # Normalize fingerprints to bare upper-case hex so keytool (AB:CD:..) and apksigner (abcd..) output compare equal.
 norm() { tr -d ': \t\r' | tr 'a-f' 'A-F'; }
