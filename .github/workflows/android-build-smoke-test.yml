@@ -20,7 +20,6 @@ env:
   REPORT_DIR: ci-report
   DIAG_DIR: diagnostics
   EMULATOR_API: '34'
-  ANDROID_USER_HOME: ${{ runner.temp }}/android-user-home/.android
 
 jobs:
   build-and-smoke-test:
@@ -51,6 +50,9 @@ jobs:
       - name: Set up Gradle (wrapper version, with caching)
         id: gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Set ANDROID_USER_HOME
+        run: echo "ANDROID_USER_HOME=$RUNNER_TEMP/android-user-home/.android" >> "$GITHUB_ENV"
 
       - name: Prepare folders
         run: mkdir -p "$REPORT_DIR" "$DIAG_DIR" apks
