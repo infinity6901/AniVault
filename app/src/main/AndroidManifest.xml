@@ -1,22 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Network permissions for API calls and scraping -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Biometric authentication -->
+    <!-- Biometric / device-credential gate for H-Vault -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.USE_FINGERPRINT" />
 
-    <!-- Storage – needed on API 28 and below for PDF export to Downloads -->
+    <!-- Reminders (Android 13+ runtime permission; requested only after explaining the value) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Storage – needed on API 28 and below for exports to Downloads -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
-    <!-- Optional: declare biometric feature so Play Store shows it -->
     <uses-feature
         android:name="android.hardware.fingerprint"
         android:required="false" />
@@ -33,14 +35,22 @@
         android:theme="@style/Theme.AniVault"
         android:hardwareAccelerated="true">
 
+        <!-- singleTask so OAuth redirects (anivault://auth/...) return to the running instance. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.AniVault">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="anivault" android:host="auth" />
             </intent-filter>
         </activity>
 

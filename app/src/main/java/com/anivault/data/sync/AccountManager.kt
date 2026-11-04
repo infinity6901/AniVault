@@ -1,0 +1,285 @@
+package com.anivault.data.sync
+
+import android.content.Context
+import android.net.Uri
+import com.anivault.core.AppPrefs
+import com.anivault.core.DiagnosticsLog
+import com.anivault.core.Sanitizer
+import com.anivault.core.SecureStore
+import com.anivault.data.provider.FailureKind
+import com.anivault.data.provider.HttpErrors
+import com.anivault.data.provider.HttpRequestSpec
+import com.anivault.data.provider.HttpTransport
+import com.anivault.data.provider.OkHttpTransport
+import com.anivault.data.provider.ProviderException
+import com.anivault.data.provider.asObjOrNull
+import com.anivault.data.provider.str
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import okhttp3.OkHttpClient
+import java.net.URLEncoder
+import java.security.SecureRandom
+import javax.inject.Inject
+import javax.inject.Named
+import javax.inject.Singleton
+
+/**
+ * Owns sign-in for AniList / MyAnimeList / Kitsu (spec §12).
+ *
+ *  • AniList: browser sign-in (implicit grant) → token arrives in the redirect fragment.
+ *  • MyAnimeList: browser sign-in with PKCE → code exchanged for access + refresh token.
+ *  • Kitsu: password grant. The password is sent once to Kitsu and never stored or logged.
+ *
+ * Tokens and client ids are kept only in [SecureStore]. Client ids are supplied by the user –
+ * nothing is bundled with the app.
+ */
+@Singleton
+class AccountManager @Inject constructor(
+    @ApplicationContext ctx: Context,
+    private val secure: SecureStore,
+    @Named("api") client: OkHttpClient,
+    prefs: AppPrefs,
+    private val diagnostics: DiagnosticsLog
+) {
+    private val meta = ctx.getSharedPreferences("anivault_accounts", Context.MODE_PRIVATE)
+    private val transport: HttpTransport = OkHttpTransport(client) { prefs.networkTimeoutSec }
+    private val apis: Map<AccountProvider, AccountApi> = mapOf(
+        AccountProvider.ANILIST to AniListAccountApi(transport),
+        AccountProvider.MAL to MalAccountApi(transport),
+        AccountProvider.KITSU to KitsuAccountApi(transport)
+    )
+
+    private val _states = MutableStateFlow(readAll())
+    val states: StateFlow<Map<AccountProvider, AccountState>> = _states.asStateFlow()
+
+    fun api(provider: AccountProvider): AccountApi = apis.getValue(provider)
+    fun state(provider: AccountProvider): AccountState = _states.value.getValue(provider)
+
+    // ── Client ids ─────────────────────────────────────────────────────────
+    fun clientId(p: AccountProvider): String? = secure.get("acct_client:${p.key}")
+    fun setClientId(p: AccountProvider, value: String) {
+        if (value.isBlank()) secure.remove("acct_client:${p.key}") else secure.put("acct_client:${p.key}", value.trim())
+        refresh()
+    }
+
+    // ── Sign in ────────────────────────────────────────────────────────────
+
+    /** URL to open in the browser, or null when the provider doesn't use a browser sign-in. */
+    fun authorizeUrl(p: AccountProvider): String? {
+        val id = clientId(p)?.takeIf { it.isNotBlank() } ?: return null
+        val enc = { s: String -> URLEncoder.encode(s, "UTF-8") }
+        return when (p) {
+            AccountProvider.ANILIST ->
+                "https://anilist.co/api/v2/oauth/authorize?client_id=${enc(id)}&response_type=token"
+            AccountProvider.MAL -> {
+                val verifier = randomString(64)
+                val state = randomString(24)
+                secure.put("acct_pkce:$state", verifier)
+                "https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=${enc(id)}" +
+                    "&code_challenge=${enc(verifier)}&code_challenge_method=plain&state=${enc(state)}" +
+                    "&redirect_uri=${enc(p.redirectUri)}"
+            }
+            AccountProvider.KITSU -> null
+        }
+    }
+
+    /** Handles `anivault://auth/<provider>…` delivered to MainActivity. Returns a user-facing message. */
+    suspend fun handleRedirect(data: String): String? {
+        val uri = Uri.parse(data)
+        if (uri.scheme != "anivault" || uri.host != "auth") return null
+        val p = AccountProvider.fromKey(uri.pathSegments.firstOrNull()) ?: return null
+        return try {
+            when (p) {
+                AccountProvider.ANILIST -> {
+                    val frag = uri.fragment.orEmpty()
+                    val token = frag.split('&').map { it.split('=', limit = 2) }
+                        .firstOrNull { it[0] == "access_token" && it.size == 2 }?.get(1)
+                        ?: throw ProviderException(FailureKind.AUTH, "AniList did not return a sign-in token")
+                    val expiresIn = frag.split('&').map { it.split('=', limit = 2) }
+                        .firstOrNull { it[0] == "expires_in" && it.size == 2 }?.get(1)?.toLongOrNull()
+                    finishSignIn(p, token, null, expiresIn)
+                }
+                AccountProvider.MAL -> {
+                    val error = uri.getQueryParameter("error")
+                    if (error != null) throw ProviderException(FailureKind.AUTH, "MyAnimeList sign-in was cancelled or refused")
+                    val code = uri.getQueryParameter("code")
+                    val state = uri.getQueryParameter("state").orEmpty()
+                    val verifier = secure.get("acct_pkce:$state")
+                    secure.remove("acct_pkce:$state")
+                    if (code.isNullOrBlank() || verifier == null) throw ProviderException(FailureKind.AUTH, "Sign-in response did not match this request. Try again.")
+                    val res = transport.execute(
+                        HttpRequestSpec(
+                            "https://myanimelist.net/v1/oauth2/token", "POST", mapOf("Accept" to "application/json"),
+                            form(
+                                "client_id" to clientId(p), "grant_type" to "authorization_code", "code" to code,
+                                "redirect_uri" to p.redirectUri, "code_verifier" to verifier
+                            ),
+                            "application/x-www-form-urlencoded"
+                        )
+                    )
+                    val t = parseToken(res, "MyAnimeList")
+                    finishSignIn(p, t.access, t.refresh, t.expiresIn)
+                }
+                AccountProvider.KITSU -> null
+            }
+            "Connected to ${p.label}"
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            fail(p, e)
+            "Couldn't connect to ${p.label}: ${Sanitizer.clean(e.message)}"
+        }
+    }
+
+    suspend fun signInKitsu(email: String, password: String): String? {
+        val p = AccountProvider.KITSU
+        return try {
+            val res = transport.execute(
+                HttpRequestSpec(
+                    "https://kitsu.io/api/oauth/token", "POST", mapOf("Accept" to "application/json"),
+                    form("grant_type" to "password", "username" to email.trim(), "password" to password),
+                    "application/x-www-form-urlencoded"
+                )
+            )
+            val t = parseToken(res, "Kitsu")
+            finishSignIn(p, t.access, t.refresh, t.expiresIn)
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ProviderException) {
+            val m = if (e.kind == FailureKind.AUTH || e.httpCode == 400) "Kitsu rejected that email or password" else Sanitizer.clean(e.message)
+            fail(p, e); m
+        } catch (e: Exception) {
+            fail(p, e); Sanitizer.clean(e.message)
+        }
+    }
+
+    fun disconnect(p: AccountProvider) {
+        secure.remove("acct_token:${p.key}"); secure.remove("acct_refresh:${p.key}"); secure.remove("acct_expires:${p.key}")
+        meta.edit().remove("name:${p.key}").remove("id:${p.key}").remove("error:${p.key}").remove("reauth:${p.key}").remove("last:${p.key}").apply()
+        refresh()
+    }
+
+    // ── Tokens ─────────────────────────────────────────────────────────────
+
+    /** Runs [block] with a valid token, refreshing once on 401/expiry. Marks the account for re-sign-in if that fails. */
+    suspend fun <T> withToken(p: AccountProvider, block: suspend (token: String, who: Identity) -> T): T {
+        val who = Identity(meta.getString("id:${p.key}", null) ?: "", meta.getString("name:${p.key}", null) ?: "")
+        var token = secure.get("acct_token:${p.key}") ?: throw needReauth(p)
+        val expires = secure.get("acct_expires:${p.key}")?.toLongOrNull() ?: 0L
+        if (expires in 1 until System.currentTimeMillis() + 60_000L) token = refreshToken(p) ?: throw needReauth(p)
+        return try {
+            block(token, who)
+        } catch (e: ProviderException) {
+            if (e.kind != FailureKind.AUTH) throw e
+            val fresh = refreshToken(p) ?: throw needReauth(p)
+            try { block(fresh, who) } catch (e2: ProviderException) { if (e2.kind == FailureKind.AUTH) throw needReauth(p) else throw e2 }
+        }
+    }
+
+    private suspend fun refreshToken(p: AccountProvider): String? {
+        val refresh = secure.get("acct_refresh:${p.key}") ?: return null
+        return try {
+            val res = when (p) {
+                AccountProvider.MAL -> transport.execute(
+                    HttpRequestSpec(
+                        "https://myanimelist.net/v1/oauth2/token", "POST", mapOf("Accept" to "application/json"),
+                        form("client_id" to clientId(p), "grant_type" to "refresh_token", "refresh_token" to refresh),
+                        "application/x-www-form-urlencoded"
+                    )
+                )
+                AccountProvider.KITSU -> transport.execute(
+                    HttpRequestSpec(
+                        "https://kitsu.io/api/oauth/token", "POST", mapOf("Accept" to "application/json"),
+                        form("grant_type" to "refresh_token", "refresh_token" to refresh),
+                        "application/x-www-form-urlencoded"
+                    )
+                )
+                AccountProvider.ANILIST -> return null
+            }
+            val t = parseToken(res, p.label)
+            storeTokens(p, t.access, t.refresh ?: refresh, t.expiresIn)
+            t.access
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun needReauth(p: AccountProvider): ProviderException {
+        meta.edit().putBoolean("reauth:${p.key}", true).apply()
+        refresh()
+        return ProviderException(FailureKind.AUTH, "${p.label} sign-in expired. Sign in again.")
+    }
+
+    // ── Sync bookkeeping ───────────────────────────────────────────────────
+    fun recordSync(p: AccountProvider, at: Long) {
+        meta.edit().putLong("last:${p.key}", at).remove("error:${p.key}").apply(); refresh()
+    }
+    fun recordError(p: AccountProvider, message: String?) {
+        meta.edit().putString("error:${p.key}", Sanitizer.clean(message)).apply(); refresh()
+    }
+    fun lastSyncAt(p: AccountProvider): Long = meta.getLong("last:${p.key}", 0L)
+    fun connectedProviders(): List<AccountProvider> = _states.value.values.filter { it.connected && !it.needsReauth }.map { it.provider }
+
+    // ── Internals ──────────────────────────────────────────────────────────
+
+    private suspend fun finishSignIn(p: AccountProvider, access: String, refresh: String?, expiresInSec: Long?) {
+        storeTokens(p, access, refresh, expiresInSec)
+        val who = try { apis.getValue(p).identify(access) } catch (e: Exception) {
+            secure.remove("acct_token:${p.key}"); secure.remove("acct_refresh:${p.key}"); secure.remove("acct_expires:${p.key}")
+            throw e
+        }
+        meta.edit().putString("id:${p.key}", who.accountId).putString("name:${p.key}", who.name)
+            .remove("error:${p.key}").remove("reauth:${p.key}").apply()
+        refresh()
+        diagnostics.record(p.label, "sign-in", true, 0)
+    }
+
+    private fun storeTokens(p: AccountProvider, access: String, refresh: String?, expiresInSec: Long?) {
+        secure.put("acct_token:${p.key}", access)
+        if (refresh != null) secure.put("acct_refresh:${p.key}", refresh)
+        if (expiresInSec != null && expiresInSec > 0) secure.put("acct_expires:${p.key}", (System.currentTimeMillis() + expiresInSec * 1000L).toString())
+        else secure.remove("acct_expires:${p.key}")
+    }
+
+    private fun fail(p: AccountProvider, e: Exception) {
+        diagnostics.record(p.label, "sign-in", false, 0, e.message)
+        meta.edit().putString("error:${p.key}", Sanitizer.clean(e.message)).apply()
+        refresh()
+    }
+
+    private class Tokens(val access: String, val refresh: String?, val expiresIn: Long?)
+
+    private fun parseToken(res: com.anivault.data.provider.HttpResult, what: String): Tokens {
+        HttpErrors.check(res, what)
+        val o = HttpErrors.parse(res.body, what).asObjOrNull()
+            ?: throw ProviderException(FailureKind.MALFORMED, "$what returned an unexpected response")
+        val access = o.str("access_token") ?: throw ProviderException(FailureKind.MALFORMED, "$what returned no token")
+        return Tokens(access, o.str("refresh_token"), o.str("expires_in")?.toLongOrNull())
+    }
+
+    private fun refresh() { _states.value = readAll() }
+
+    private fun readAll(): Map<AccountProvider, AccountState> = AccountProvider.values().associateWith { p ->
+        AccountState(
+            provider = p,
+            connected = secure.get("acct_token:${p.key}") != null && meta.getString("name:${p.key}", null) != null,
+            accountName = meta.getString("name:${p.key}", null),
+            clientIdSet = !clientId(p).isNullOrBlank(),
+            lastSyncAt = meta.getLong("last:${p.key}", 0L),
+            lastError = meta.getString("error:${p.key}", null),
+            needsReauth = meta.getBoolean("reauth:${p.key}", false)
+        )
+    }
+
+    private fun randomString(len: Int): String {
+        val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+        val rnd = SecureRandom()
+        return buildString { repeat(len) { append(chars[rnd.nextInt(chars.length)]) } }
+    }
+}

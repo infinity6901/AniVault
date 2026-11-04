@@ -14,7 +14,7 @@ android {
         minSdk        = 26
         targetSdk     = 34
         versionCode   = 2
-        versionName   = "2.0.0"
+        versionName   = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -63,6 +63,10 @@ android {
         kotlinCompilerExtensionVersion = "1.5.14"
     }
 
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -92,6 +96,8 @@ dependencies {
     // ── Room ───────────────────────────────────────────────────────────────
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
+    implementation(libs.sqlcipher)
+    implementation(libs.sqlite.ktx)
     ksp(libs.room.compiler)
 
     // ── Hilt ───────────────────────────────────────────────────────────────
@@ -119,4 +125,11 @@ dependencies {
 
     // ── DataStore ─────────────────────────────────────────────────────────
     implementation(libs.datastore.preferences)
+
+    // ── Background work (reminders) ────────────────────────────────────────
+    implementation(libs.work.runtime.ktx)
+
+    // ── Unit tests (pure JVM) ──────────────────────────────────────────────
+    testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
 }

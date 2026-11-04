@@ -5,7 +5,6 @@ import com.anivault.data.local.model.WatchStatus
 
 class Converters {
 
-    // ── List<String> ↔ pipe-delimited String ──────────────────────────────
     // Triple-pipe separator avoids conflicts with commas inside genre/tag names.
     @TypeConverter
     fun fromStringList(list: List<String>): String =
@@ -16,10 +15,9 @@ class Converters {
         if (value.isBlank()) emptyList()
         else value.split("|||").map { it.trim() }.filter { it.isNotEmpty() }
 
-    // ── WatchStatus ↔ String ───────────────────────────────────────────────
     @TypeConverter
     fun fromWatchStatus(status: WatchStatus): String = status.name
 
     @TypeConverter
-    fun toWatchStatus(value: String): WatchStatus = WatchStatus.valueOf(value)
+    fun toWatchStatus(value: String): WatchStatus = WatchStatus.parse(value)
 }

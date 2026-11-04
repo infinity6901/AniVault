@@ -87,6 +87,7 @@ class PdfExportManager @Inject constructor(
         val groups = listOf(
             "Watching"      to entries.filter { it.status == WatchStatus.WATCHING },
             "Completed"     to entries.filter { it.status == WatchStatus.COMPLETED },
+            "On Hold"       to entries.filter { it.status == WatchStatus.ON_HOLD },
             "Plan to Watch" to entries.filter { it.status == WatchStatus.PLAN_TO_WATCH },
             "Dropped"       to entries.filter { it.status == WatchStatus.DROPPED }
         ).filter { it.second.isNotEmpty() }
@@ -258,6 +259,7 @@ class PdfExportManager @Inject constructor(
     private fun statusColor(s: WatchStatus) = when (s) {
         WatchStatus.WATCHING      -> cWatch
         WatchStatus.COMPLETED     -> cDone
+        WatchStatus.ON_HOLD       -> cPlan
         WatchStatus.PLAN_TO_WATCH -> cPlan
         WatchStatus.DROPPED       -> cDrop
     }

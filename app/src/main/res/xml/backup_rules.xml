@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-   Exclude the Room database and DataStore from auto-backup so that
-   sensitive H-Vault data is never uploaded to Google Drive.
+   Nothing from AniVault is included in Android auto-backup. The encrypted database is useless
+   without its Keystore-wrapped key (which never leaves the device), and tokens/secrets must not
+   be uploaded. Users create password-protected backups from Settings → Backup & Restore.
 -->
 <full-backup-content>
-    <exclude domain="database" path="anivault.db" />
-    <exclude domain="database" path="anivault.db-shm" />
-    <exclude domain="database" path="anivault.db-wal" />
-    <exclude domain="file"     path="datastore/" />
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
+    <exclude domain="file" path="." />
+    <exclude domain="external" path="." />
 </full-backup-content>
