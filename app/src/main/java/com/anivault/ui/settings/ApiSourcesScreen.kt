@@ -25,6 +25,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import com.anivault.data.provider.CheckResult
 import com.anivault.data.provider.*
 import com.anivault.ui.common.*
 import com.anivault.ui.theme.AniVaultColors
