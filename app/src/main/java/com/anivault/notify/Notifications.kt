@@ -69,6 +69,8 @@ object Notifications {
  * nothing private appears on a lock screen (spec §14/§16).
  */
 class ReminderWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
+    // Permission is checked above via Notifications.hasPermission(); lint can't see through the helper.
+    @android.annotation.SuppressLint("MissingPermission")
     override suspend fun doWork(): Result {
         val ep = EntryPointAccessors.fromApplication(applicationContext, NotifyEntryPoint::class.java)
         val prefs = ep.prefs()
