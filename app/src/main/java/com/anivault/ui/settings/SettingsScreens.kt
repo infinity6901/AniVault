@@ -208,6 +208,17 @@ fun BackupScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
             OutlinedButton(onClick = { vm.exportList("docx") }, enabled = !busy) { Text("Word") }
             OutlinedButton(onClick = { vm.exportList("json") }, enabled = !busy) { Text("JSON") }
         }
+        GroupLabel("Export H-Vault")
+        Note("Private entries with their covers. You must unlock with your fingerprint, face or screen lock first. The file is saved to Downloads and is not encrypted, so keep it somewhere safe.")
+        val ctx = LocalContext.current
+        val askThenExport = { kind: String ->
+            com.anivault.ui.vault.authenticateDevice(ctx, "Export H-Vault", "Confirm it's you to export your private library", { vm.exportVault(kind) }, { vm.say(it) })
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { askThenExport("pdf") }, enabled = !busy) { Text("PDF") }
+            OutlinedButton(onClick = { askThenExport("docx") }, enabled = !busy) { Text("Word") }
+            OutlinedButton(onClick = { askThenExport("json") }, enabled = !busy) { Text("JSON") }
+        }
     }
 
     pwDialog?.let { kind ->

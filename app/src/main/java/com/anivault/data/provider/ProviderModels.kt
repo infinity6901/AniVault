@@ -34,7 +34,8 @@ enum class AnimeApiType(val label: String) {
     ANILIST_GRAPHQL("AniList (GraphQL compatible)"),
     MAL_V2("MyAnimeList v2"),
     JIKAN_COMPATIBLE("Jikan-compatible REST"),
-    KITSU_JSON_API("Kitsu (JSON:API)")
+    KITSU_JSON_API("Kitsu (JSON:API)"),
+    JIKAN_EDGE("Jikan-Edge (v1 REST)")
 }
 
 /** A configured provider (spec §5/§6). Credentials are NOT stored here – see SourceStore. */

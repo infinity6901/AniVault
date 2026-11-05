@@ -36,6 +36,7 @@ class SettingsViewModel @Inject constructor(
     private val sync: SyncManager,
     private val backup: BackupManager,
     private val animeDao: AnimeDao,
+    private val hvaultDao: com.anivault.data.local.dao.HVaultDao,
     private val providers: ProviderRepository,
     val diagnostics: DiagnosticsLog,
     val migrator: LegacyMigrator,
@@ -119,6 +120,15 @@ class SettingsViewModel @Inject constructor(
             when (kind) { "pdf" -> pdf.exportAnimeToPdf(entries); "docx" -> docx.exportAnimeToDocs(entries); else -> json.exportAnimeJson(entries) }
         }
         say(if (ok) "Saved to Downloads." else "Export failed.")
+    }
+
+    /** H-Vault export. The caller must have passed the device lock check first. */
+    fun exportVault(kind: String) = launchBusy {
+        val entries = hvaultDao.getAll()
+        val ok = withContext(Dispatchers.IO) {
+            when (kind) { "pdf" -> pdf.exportHVaultToPdf(entries); "docx" -> docx.exportHVaultToDocs(entries); else -> json.exportHVaultJson(entries) }
+        }
+        say(if (ok) "H-Vault export saved to Downloads." else "Export failed.")
     }
 
     private fun launchBusy(block: suspend () -> Unit) {

@@ -44,4 +44,21 @@ class FiltersAndStatsTests {
         assertEquals(m, RemoteIds.parse(RemoteIds.encode(m)))
         assertTrue(RemoteIds.parse("not json").isEmpty())
     }
+
+    @Test fun completed_status_fills_progress() {
+        val e = AnimeEntry(id = "c", watchedEpisodes = 0, totalEpisodes = 37, status = WatchStatus.PLAN_TO_WATCH)
+        val done = com.anivault.data.library.ProgressRules.withStatus(e, WatchStatus.COMPLETED, 1000L)
+        assertEquals(37, done.watchedEpisodes)
+        assertEquals(1000L, done.endDate)
+        val unknown = com.anivault.data.library.ProgressRules.withStatus(e.copy(totalEpisodes = 0), WatchStatus.COMPLETED, 1L)
+        assertEquals(0, unknown.watchedEpisodes)
+        assertEquals(5, com.anivault.data.library.ProgressRules.withStatus(done.copy(watchedEpisodes = 5), WatchStatus.DROPPED, 2L).watchedEpisodes)
+    }
+
+    @Test fun export_counts_completed_as_fully_watched() {
+        val rows = com.anivault.ui.export.ExportData.anime(listOf(AnimeEntry(id = "d", watchedEpisodes = 0, totalEpisodes = 37, durationMinutes = 23, status = WatchStatus.COMPLETED)))
+        assertEquals(37, rows[0].watched)
+        assertEquals(37L * 23, rows[0].minutes)
+        assertEquals("14h 11m", com.anivault.ui.export.ExportData.duration(rows[0].minutes))
+    }
 }

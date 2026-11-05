@@ -59,8 +59,9 @@ class AdultCatalogRepository @Inject constructor(
         object : AdultCatalogSource("AniList (18+)", "anilist18") {
             override fun adapter() = AniListAdapter(src("anilist18", sourceName, "https://graphql.anilist.co", AnimeApiType.ANILIST_GRAPHQL), http, adult = true)
         },
-        object : AdultCatalogSource("MyAnimeList via Jikan (18+)", "jikan18") {
-            override fun adapter() = JikanAdapter(src("jikan18", sourceName, "https://api.jikan.moe/v4", AnimeApiType.JIKAN_COMPATIBLE), http, adult = true)
+        object : AdultCatalogSource("MyAnimeList via Tenrai (18+)", "mal18") {
+            // Jikan's public API was discontinued on 1 Oct 2026; Tenrai serves the same Jikan v4 schema.
+            override fun adapter() = JikanAdapter(src("mal18", sourceName, "https://api.tenrai.org/v1", AnimeApiType.JIKAN_COMPATIBLE), http, adult = true)
         },
         object : AdultCatalogSource("Kitsu (18+)", "kitsu18") {
             override fun adapter() = KitsuAdapter(src("kitsu18", sourceName, "https://kitsu.io/api/edge", AnimeApiType.KITSU_JSON_API), http, adult = true)

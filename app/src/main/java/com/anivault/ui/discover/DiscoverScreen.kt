@@ -235,7 +235,7 @@ private fun ResultRow(a: NormalizedAnime, inLibrary: Boolean, onClick: () -> Uni
 }
 
 @Composable
-private fun CatalogSheet(a: NormalizedAnime, inLibrary: Boolean, onAdd: (WatchStatus?) -> Unit, onDismiss: () -> Unit) {
+fun CatalogSheet(a: NormalizedAnime, inLibrary: Boolean, onAdd: (WatchStatus?) -> Unit, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row {
@@ -323,4 +323,33 @@ private fun DiscoverFilters(current: SearchFilters, onApply: (SearchFilters) -> 
             }
         }
     }
+}
+
+@HiltViewModel
+class CatalogAddViewModel @Inject constructor(
+    private val library: LibraryRepository,
+    private val backfill: com.anivault.data.library.DurationBackfill
+) : ViewModel() {
+    fun inLibrary(id: String) = library.observe(id).map { it != null }
+
+    fun add(item: NormalizedAnime, status: WatchStatus?, onResult: (String) -> Unit) {
+        viewModelScope.launch {
+            val msg = try {
+                if (library.add(item, status).also { if (it) backfill.run() }) "Added “${item.title}”" else "Already in your library"
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                "Couldn't add to library: ${com.anivault.core.Sanitizer.clean(e.message)}"
+            }
+            onResult(msg)
+        }
+    }
+}
+
+/** The anime page shown from anywhere in the app (for example when tapping a trending title). */
+@Composable
+fun CatalogDetailHost(item: NormalizedAnime, onDismiss: () -> Unit, vm: CatalogAddViewModel = hiltViewModel()) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val inLib by remember(item.canonicalId) { vm.inLibrary(item.canonicalId) }.collectAsStateWithLifecycle(false)
+    CatalogSheet(item, inLib, onAdd = { st -> vm.add(item, st) { android.widget.Toast.makeText(ctx, it, android.widget.Toast.LENGTH_SHORT).show() }; onDismiss() }, onDismiss = onDismiss)
 }
