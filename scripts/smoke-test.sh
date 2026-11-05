@@ -77,9 +77,10 @@ smoke_one() {
 
     # Real user flow: Discover -> open a result -> Add to library. Fails only on a crash.
     adb logcat -c
+    adb shell cmd statusbar collapse >/dev/null 2>&1; adb shell am start -n "$MAIN_ACTIVITY" >/dev/null 2>&1; sleep 3
     tap_text "Discover" && sleep 10 || echo "(Discover tab not found)"
     adb shell uiautomator dump /sdcard/ui-d.xml >/dev/null 2>&1; echo "Discover screen texts: $(adb exec-out cat /sdcard/ui-d.xml | grep -o 'text="[^"]\+"' | head -n 25 | tr '\n' ' ')"
-    adb shell input tap 540 520; sleep 3   # first result row (layout-independent best effort)
+    tap_text "★ " || adb shell input tap 540 520; sleep 3   # first result row
     adb exec-out screencap -p > "$OUT/screenshot-$safe-sheet.png" 2>/dev/null || true
     if tap_text "Add to library"; then echo "(tapped Add to library)"; sleep 3; else echo "(Add to library button not on screen - network or layout)"; fi
     adb exec-out screencap -p > "$OUT/screenshot-$safe-added.png" 2>/dev/null || true
