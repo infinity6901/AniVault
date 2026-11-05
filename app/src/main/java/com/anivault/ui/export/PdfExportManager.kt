@@ -38,18 +38,18 @@ class PdfExportManager @Inject constructor(
     private val PW = 595
     private val PH = 842
     private val M = 36f
-    private val ROW_H = 54f
-    private val COVER_W = 30f
-    private val COVER_H = 42f
+    private val ROW_H = 96f
+    private val COVER_W = 58f
+    private val COVER_H = 82f
 
     // Column x positions (title block, progress, status badge, rating, time)
-    private val xTitle = M + COVER_W + 10f          // 76
-    private val wTitle = 196f
-    private val xProg = xTitle + wTitle + 8f        // 280
-    private val xStatus = xProg + 50f               // 330
-    private val wStatus = 84f
-    private val xRating = xStatus + wStatus + 10f   // 424
-    private val xTime = xRating + 44f               // 468
+    private val xTitle = M + COVER_W + 10f          // 104
+    private val wTitle = 218f
+    private val xProg = xTitle + wTitle + 8f        // 330
+    private val xStatus = xProg + 44f               // 374
+    private val wStatus = 74f
+    private val xRating = xStatus + wStatus + 6f    // 454
+    private val xTime = xRating + 50f               // 504
 
     fun exportAnimeToPdf(entries: List<AnimeEntry>): Boolean =
         write("AniVault_Anime_${dateStamp.format(Date())}.pdf", "AniVault", cTeal, ExportData.anime(entries))
@@ -152,7 +152,7 @@ class PdfExportManager @Inject constructor(
         val c = p.canvas
         val top = p.y
         // Cover (centre-cropped into a rounded rect)
-        val dst = RectF(M, top + 5f, M + COVER_W, top + 5f + COVER_H)
+        val dst = RectF(M, top + 7f, M + COVER_W, top + 7f + COVER_H)
         if (cover != null) {
             val save = c.save()
             val clip = Path().apply { addRoundRect(dst, 3f, 3f, Path.Direction.CW) }
@@ -170,15 +170,29 @@ class PdfExportManager @Inject constructor(
             c.drawRoundRect(dst, 3f, 3f, Paint().apply { color = cSurface })
         }
         // Title: wraps to two lines with the full text, ellipsised only if longer than that
-        val tp = TextPaint(paint(cText, 9.5f, bold = true))
+        val tp = TextPaint(paint(cText, 10.5f, bold = true))
         val layout = StaticLayout.Builder.obtain(r.title, 0, r.title.length, tp, wTitle.toInt())
             .setMaxLines(2).setEllipsize(TextUtils.TruncateAt.END).setAlignment(Layout.Alignment.ALIGN_NORMAL).build()
         c.save(); c.translate(xTitle, top + 6f); layout.draw(c); c.restore()
+        var ty = top + 6f + layout.height + 9f
         if (r.detail.isNotBlank()) {
             val line = TextUtils.ellipsize(r.detail, TextPaint(paint(cSub, 8f)), wTitle, TextUtils.TruncateAt.END).toString()
-            c.drawText(line, xTitle, top + 6f + layout.height + 10f, paint(cSub, 8f))
+            c.drawText(line, xTitle, ty, paint(cSub, 8f))
+            ty += 5f
         }
-        val mid = top + ROW_H / 2f + 3f
+        // Synopsis: serif italic, smaller than the title, wrapped to the space that is left in the row
+        if (r.synopsis.isNotBlank()) {
+            val sp = TextPaint(Paint().apply {
+                color = Color.parseColor("#b6c2d4"); textSize = 7.5f; isAntiAlias = true
+                typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
+            })
+            val room = top + ROW_H - 4f - ty
+            val lines = (room / 9.5f).toInt().coerceIn(1, 5)
+            val syn = StaticLayout.Builder.obtain(r.synopsis, 0, r.synopsis.length, sp, wTitle.toInt())
+                .setMaxLines(lines).setEllipsize(TextUtils.TruncateAt.END).setLineSpacing(1.5f, 1f).build()
+            c.save(); c.translate(xTitle, ty); syn.draw(c); c.restore()
+        }
+        val mid = top + 22f
         c.drawText(r.progress, xProg, mid, paint(cText, 9.5f))
         // Status badge sized to its text so long labels such as "PLAN TO WATCH" never spill out
         val label = ExportData.statusLabel(r.status).uppercase()

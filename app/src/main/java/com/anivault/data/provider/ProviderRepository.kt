@@ -33,11 +33,11 @@ class AdapterFactory @Inject constructor(
     private val transport: HttpTransport = OkHttpTransport(client) { prefs.networkTimeoutSec }
 
     fun create(source: ApiSource): ProviderAdapter = when (source.type) {
-        AnimeApiType.ANILIST_GRAPHQL -> AniListAdapter(source, transport)
-        AnimeApiType.JIKAN_COMPATIBLE -> JikanAdapter(source, transport)
+        AnimeApiType.ANILIST_GRAPHQL -> AniListAdapter(source, transport, adult = source.adult)
+        AnimeApiType.JIKAN_COMPATIBLE -> JikanAdapter(source, transport, adult = source.adult)
         AnimeApiType.MAL_V2 -> MalAdapter(source, transport) { store.clientId(source.id) }
-        AnimeApiType.KITSU_JSON_API -> KitsuAdapter(source, transport)
-        AnimeApiType.JIKAN_EDGE -> JikanEdgeAdapter(source, transport)
+        AnimeApiType.KITSU_JSON_API -> KitsuAdapter(source, transport, adult = source.adult)
+        AnimeApiType.JIKAN_EDGE -> JikanEdgeAdapter(source, transport, adult = source.adult)
     }
 }
 

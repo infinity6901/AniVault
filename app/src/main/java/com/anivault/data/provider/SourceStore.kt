@@ -17,11 +17,18 @@ import javax.inject.Singleton
  * per-source health from REAL connection tests. Credentials (MAL Client ID) live in [SecureStore].
  */
 @Singleton
-class SourceStore @Inject constructor(
-    @ApplicationContext ctx: Context,
-    private val secure: SecureStore
+open class SourceStore internal constructor(
+    ctx: Context,
+    private val secure: SecureStore,
+    prefsName: String,
+    private val defaultList: () -> List<ApiSource>,
+    /** True for the H-Vault list: new sources are adult catalogs. */
+    val adultScope: Boolean
 ) {
-    private val prefs = ctx.getSharedPreferences("anime_api_sources", Context.MODE_PRIVATE)
+    @Inject constructor(@ApplicationContext ctx: Context, secure: SecureStore) :
+        this(ctx, secure, "anime_api_sources", { defaults() }, false)
+
+    private val prefs = ctx.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
 
     private val _sources = MutableStateFlow(load())
     val sources: StateFlow<List<ApiSource>> = _sources.asStateFlow()
@@ -44,7 +51,7 @@ class SourceStore @Inject constructor(
     fun add(name: String, baseUrl: String, type: AnimeApiType, clientId: String = ""): ApiSource {
         val source = ApiSource(
             id = UUID.randomUUID().toString(), name = name.trim(), baseUrl = baseUrl,
-            type = type, enabled = false, builtIn = false, verified = false
+            type = type, enabled = false, builtIn = false, verified = false, adult = adultScope
         )
         commit(_sources.value + source)
         if (clientId.isNotBlank()) setClientId(source.id, clientId)
@@ -85,7 +92,7 @@ class SourceStore @Inject constructor(
 
     fun resetToDefaults() {
         _sources.value.forEach { secure.remove(clientKey(it.id)) }
-        commit(defaults())
+        commit(defaultList())
     }
 
     // ── Credentials ────────────────────────────────────────────────────────
@@ -106,7 +113,7 @@ class SourceStore @Inject constructor(
                 JSONObject().put("id", s.id).put("name", s.name).put("baseUrl", s.baseUrl)
                     .put("type", s.type.name).put("enabled", s.enabled).put("builtIn", s.builtIn)
                     .put("verified", s.verified).put("lastCheckedAt", s.lastCheckedAt)
-                    .put("lastStatus", s.lastStatus).put("lastError", s.lastError)
+                    .put("lastStatus", s.lastStatus).put("lastError", s.lastError).put("adult", s.adult)
             )
         }
         prefs.edit().putString(KEY_SOURCES, arr.toString()).apply()
@@ -115,12 +122,12 @@ class SourceStore @Inject constructor(
     private fun load(): List<ApiSource> {
         val raw = prefs.getString(KEY_SOURCES, null)
         if (raw == null) {
-            val d = defaults()
+            val d = defaultList()
             // Can't call commit() here (property initialisers run before the flow exists).
             prefs.edit().putString(KEY_SOURCES, encode(d)).apply()
             return d
         }
-        val arr = runCatching { JSONArray(raw) }.getOrNull() ?: return defaults()
+        val arr = runCatching { JSONArray(raw) }.getOrNull() ?: return defaultList()
         val out = ArrayList<ApiSource>()
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
@@ -140,7 +147,8 @@ class SourceStore @Inject constructor(
                 type = if (migrated) AnimeApiType.JIKAN_EDGE else type,
                 enabled = o.optBoolean("enabled", true), builtIn = o.optBoolean("builtIn", false),
                 verified = !migrated && o.optBoolean("verified", false), lastCheckedAt = o.optLong("lastCheckedAt", 0L),
-                lastStatus = o.optString("lastStatus", ""), lastError = o.optString("lastError", "")
+                lastStatus = o.optString("lastStatus", ""), lastError = o.optString("lastError", ""),
+                adult = o.optBoolean("adult", false)
             )
         }
         return out
@@ -170,6 +178,14 @@ class SourceStore @Inject constructor(
          * enabled. MyAnimeList needs the user's Client ID. The community endpoints from the design
          * mockup are listed but disabled and unverified until the user tests them.
          */
+        /** H-Vault's own list: adult-rated catalogs, independent from the main API Sources. */
+        fun vaultDefaults(): List<ApiSource> = listOf(
+            ApiSource("vault-anilist", "AniList (18+)", "https://graphql.anilist.co", AnimeApiType.ANILIST_GRAPHQL, enabled = true, builtIn = true, adult = true),
+            ApiSource("vault-kitsu", "Kitsu (18+)", "https://kitsu.io/api/edge", AnimeApiType.KITSU_JSON_API, enabled = true, builtIn = true, adult = true),
+            ApiSource("vault-tenrai", "MyAnimeList via Tenrai (18+)", "https://api.tenrai.org/v1", AnimeApiType.JIKAN_COMPATIBLE, enabled = true, builtIn = true, adult = true),
+            ApiSource("vault-jikan-edge", "Jikan-Edge (18+)", JIKAN_EDGE_URL, AnimeApiType.JIKAN_EDGE, enabled = false, builtIn = true, adult = true)
+        )
+
         fun defaults(): List<ApiSource> = listOf(
             ApiSource("anilist", "AniList", "https://graphql.anilist.co", AnimeApiType.ANILIST_GRAPHQL, enabled = true, builtIn = true),
             ApiSource("mal", "MyAnimeList (MAL)", "https://api.myanimelist.net/v2", AnimeApiType.MAL_V2, enabled = false, builtIn = true),
@@ -179,3 +195,8 @@ class SourceStore @Inject constructor(
         )
     }
 }
+
+/** Separate source list (and priority order) used only by H-Vault search. */
+@Singleton
+class VaultSourceStore @Inject constructor(@ApplicationContext ctx: Context, secure: SecureStore) :
+    SourceStore(ctx, secure, "vault_api_sources", { SourceStore.vaultDefaults() }, true)

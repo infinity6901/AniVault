@@ -37,7 +37,7 @@ import java.util.Date
 import javax.inject.Inject
 
 @HiltViewModel
-class ApiSourcesViewModel @Inject constructor(
+open class ApiSourcesViewModel @Inject constructor(
     val store: SourceStore,
     private val providers: ProviderRepository
 ) : ViewModel() {
@@ -62,7 +62,7 @@ class ApiSourcesViewModel @Inject constructor(
             val tmp = "draft-test"
             val cid = clientId.ifBlank { existingId?.let { store.clientId(it) }.orEmpty() }
             if (type == AnimeApiType.MAL_V2) store.setClientId(tmp, cid)
-            try { done(providers.test(ApiSource(tmp, name.trim(), v.normalizedUrl!!, type))) }
+            try { done(providers.test(ApiSource(tmp, name.trim(), v.normalizedUrl!!, type, adult = store.adultScope))) }
             finally { store.setClientId(tmp, "") }
         }
     }
@@ -90,7 +90,7 @@ class ApiSourcesViewModel @Inject constructor(
 }
 
 @Composable
-fun ApiSourcesScreen(onBack: () -> Unit, vm: ApiSourcesViewModel = hiltViewModel()) {
+fun ApiSourcesScreen(onBack: () -> Unit, embedded: Boolean = false, vm: ApiSourcesViewModel = hiltViewModel()) {
     val sources by vm.sources.collectAsStateWithLifecycle()
     val auto by vm.autoFallback.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<ApiSource?>(null) }
@@ -105,8 +105,10 @@ fun ApiSourcesScreen(onBack: () -> Unit, vm: ApiSourcesViewModel = hiltViewModel
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background, snackbarHost = { SnackbarHost(snackbar) },
+        contentWindowInsets = if (embedded) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets,
         topBar = {
-            TopAppBar(title = { Text("API Sources", fontWeight = FontWeight.Bold) },
+            TopAppBar(title = { Text(if (vm.store.adultScope) "H-Vault API Sources" else "API Sources", fontWeight = FontWeight.Bold) },
+                windowInsets = if (embedded) WindowInsets(0, 0, 0, 0) else TopAppBarDefaults.windowInsets,
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 actions = { TextButton(onClick = { confirmReset = true }) { Text("Reset") } },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface))
@@ -285,3 +287,10 @@ private fun SourceSheet(existing: ApiSource?, vm: ApiSourcesViewModel, onDone: (
     }
     if (discard) ConfirmDialog("Discard changes?", "What you entered will be lost.", "Discard", { discard = false; onDone(null) }, { discard = false }, destructive = true)
 }
+
+/** The H-Vault list: separate from the main API Sources and used only by H-Vault search. */
+@HiltViewModel
+class VaultApiSourcesViewModel @Inject constructor(
+    store: VaultSourceStore,
+    @javax.inject.Named("vault") providers: ProviderRepository
+) : ApiSourcesViewModel(store, providers)

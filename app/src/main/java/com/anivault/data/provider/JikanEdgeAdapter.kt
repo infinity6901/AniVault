@@ -10,7 +10,8 @@ import java.net.URLEncoder
  */
 class JikanEdgeAdapter(
     private val source: ApiSource,
-    private val http: HttpTransport
+    private val http: HttpTransport,
+    private val adult: Boolean = false
 ) : ProviderAdapter {
 
     override val sections: Set<BrowseSection> =
@@ -21,9 +22,12 @@ class JikanEdgeAdapter(
     override suspend fun search(query: String, page: Int): PagedResult =
         get("$base/anime?q=${URLEncoder.encode(query, "UTF-8")}&page=$page")
 
+    // Jikan-Edge answers HTTP 400 to `/seasons/now?page=…` (a season comes back in one response, with no
+    // paging), so the season list is requested without paging. Trending uses the documented top list.
     override suspend fun browse(section: BrowseSection, page: Int): PagedResult = when (section) {
-        BrowseSection.TOP_RATED -> get("$base/top/anime?page=$page")
-        BrowseSection.TRENDING, BrowseSection.SEASONAL -> get("$base/seasons/now?page=$page")
+        BrowseSection.TOP_RATED, BrowseSection.TRENDING -> get("$base/top/anime?page=$page")
+        BrowseSection.SEASONAL ->
+            if (page > 1) PagedResult(emptyList(), false) else get("$base/seasons/now")
         else -> throw ProviderException(FailureKind.UNSUPPORTED, "${source.name} does not offer “${section.label}”")
     }
 
@@ -33,16 +37,22 @@ class JikanEdgeAdapter(
 
     private suspend fun get(url: String): PagedResult {
         val res = http.execute(HttpRequestSpec(url = url, headers = mapOf("Accept" to "application/json")))
+        if (res.code == 400) {
+            // Jikan-Edge explains itself as { "error": { "code", "message" } }; surface that instead of a bare 400.
+            val detail = runCatching { HttpErrors.parse(res.body, source.name).asObjOrNull()?.obj("error")?.str("message") }.getOrNull()
+            if (!detail.isNullOrBlank()) throw ProviderException(FailureKind.CLIENT, "${source.name} rejected the request: ${detail.take(140)}", 400)
+        }
         HttpErrors.check(res, source.name)
         val root = HttpErrors.parse(res.body, source.name).asObjOrNull()
             ?: throw ProviderException(FailureKind.MALFORMED, "${source.name} returned an unexpected response")
         val data = root.arr("data")
             ?: throw ProviderException(FailureKind.MALFORMED, "${source.name}: response has no data list (not Jikan-Edge?)")
         val objects = data.objects()
-        // The catalogue is the safe-for-work list: adult-rated (“Rx”) titles are dropped client-side.
-        val items = objects.filterNot { it.str("rating").orEmpty().startsWith("Rx", ignoreCase = true) }
-            .mapNotNull { parse(it) }.take(PAGE_CAP)
-        if (objects.isNotEmpty() && items.isEmpty() && objects.none { it.str("rating").orEmpty().startsWith("Rx", true) }) {
+        // Normal lists hide adult-rated (“Rx”) titles; the H-Vault list keeps only those.
+        fun isAdult(o: JsonObject) = o.str("rating").orEmpty().startsWith("Rx", ignoreCase = true) ||
+            o.arr("genres")?.objects()?.any { it.str("name").equals("Hentai", ignoreCase = true) } == true
+        val items = objects.filter { isAdult(it) == adult }.mapNotNull { parse(it) }.take(PAGE_CAP)
+        if (objects.isNotEmpty() && items.isEmpty() && objects.none { isAdult(it) }) {
             throw ProviderException(FailureKind.MALFORMED, "${source.name}: items do not match the Jikan-Edge schema")
         }
         val hasNext = root.obj("meta")?.obj("pagination")?.get("hasNextPage")
