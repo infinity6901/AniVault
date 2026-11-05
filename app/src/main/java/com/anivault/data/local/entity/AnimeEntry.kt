@@ -4,8 +4,6 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import com.anivault.data.local.model.WatchStatus
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 
 /**
  * A user-owned library entry. Every parameter has a default so Gson (backup/import) can
@@ -49,17 +47,24 @@ data class AnimeEntry(
     @ColumnInfo(defaultValue = "0") val providerScore: Float = 0f
 )
 
-/** Remote ids per service: keys "anilist", "mal", "kitsu", "kitsuEntry". */
+/** Remote ids per service: keys "anilist", "mal", "kitsu", "kitsuEntry". Uses org.json (no reflection, R8-safe). */
 object RemoteIds {
-    private val gson = Gson()
-    private val type = object : TypeToken<Map<String, String>>() {}.type
+    fun parse(raw: String): Map<String, String> {
+        if (raw.isBlank()) return emptyMap()
+        return runCatching {
+            val o = org.json.JSONObject(raw)
+            val out = LinkedHashMap<String, String>()
+            o.keys().forEach { k -> out[k] = o.optString(k, "") }
+            out as Map<String, String>
+        }.getOrDefault(emptyMap())
+    }
 
-    fun parse(raw: String): Map<String, String> =
-        if (raw.isBlank()) emptyMap()
-        else runCatching { gson.fromJson<Map<String, String>>(raw, type) ?: emptyMap() }.getOrDefault(emptyMap())
-
-    fun encode(map: Map<String, String>): String =
-        if (map.isEmpty()) "" else gson.toJson(map)
+    fun encode(map: Map<String, String>): String {
+        if (map.isEmpty()) return ""
+        val o = org.json.JSONObject()
+        map.forEach { (k, v) -> o.put(k, v) }
+        return o.toString()
+    }
 
     fun merge(raw: String, extra: Map<String, String>): String =
         encode(parse(raw) + extra.filterValues { it.isNotBlank() })

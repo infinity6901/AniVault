@@ -34,7 +34,8 @@ import kotlinx.coroutines.flow.*
 import javax.inject.Inject
 
 @HiltViewModel
-class StatsViewModel @Inject constructor(repo: LibraryRepository) : ViewModel() {
+class StatsViewModel @Inject constructor(repo: LibraryRepository, backfill: DurationBackfill) : ViewModel() {
+    init { backfill.run() }
     val stats: StateFlow<LibraryStats?> = repo.observeAll().map { StatsCalculator.compute(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 }
@@ -56,8 +57,9 @@ fun StatsScreen(onBack: () -> Unit, vm: StatsViewModel = hiltViewModel()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("Summary", fontWeight = FontWeight.Bold, fontSize = 17.sp)
                         Text("${st.total} titles · ${st.episodesWatched} episodes watched")
-                        Text("Watch time: ${formatDuration(st.watchMinutes)}")
-                        if (st.entriesMissingDuration > 0) Text("${st.entriesMissingDuration} titles have no episode length, so they are not counted in watch time.", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
+                        Text("Watch time: ${formatDuration(st.watchMinutes + st.estimatedMinutes)}")
+                        if (st.estimatedMinutes > 0) Text("Includes about ${formatDuration(st.estimatedMinutes)} estimated from typical episode lengths for ${st.entriesMissingDuration} titles whose databases don't list one. Exact lengths are fetched automatically.", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
+                        if (st.remainingMinutes > 0) Text("Still to watch: ${formatDuration(st.remainingMinutes)}")
                         Text(st.averageRating?.let { "Your average rating: ${"%.1f".format(it)} / 10" } ?: "You haven't rated anything yet.")
                     }
                 }

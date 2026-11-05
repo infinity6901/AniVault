@@ -26,6 +26,7 @@ class HentaiFallbackRepository @Inject constructor(
     private val primary:    HentaiScraperRepository,
     private val fallback:   WatchHentaiScraperRepository,
     private val nhentai:    NhentaiApiRepository,
+    private val adult:      AdultCatalogRepository,
     private val hVaultDao:  HVaultDao
 ) {
     // ── Vault observation (source-agnostic) ────────────────────────────────
@@ -39,53 +40,23 @@ class HentaiFallbackRepository @Inject constructor(
 
     suspend fun search(query: String, page: Int = 1): SearchResult =
         withContext(Dispatchers.IO) {
-
             val failures = mutableListOf<String>()
-            // 1. Primary — hanime.tv
-            val primaryResults = try {
-                primary.search(query, page)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                failures += "${primary.sourceName}: ${Sanitizer.clean(error.message, 100).ifBlank { "request failed" }}"
-                emptyList()
+            // Catalog APIs first (reliable, uncensored covers), scrapers after (often blocked by bot checks).
+            val chain: List<HentaiSource> = adult.sources + listOf(primary, fallback, nhentai)
+            chain.forEachIndexed { index, src ->
+                try {
+                    val results = src.search(query, page)
+                    if (results.isNotEmpty()) return@withContext SearchResult(results, src.sourceName, index > 0)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    failures += "${src.sourceName}: ${Sanitizer.clean(error.message, 100).ifBlank { "request failed" }}"
+                }
             }
-
-            if (primaryResults.isNotEmpty()) {
-                return@withContext SearchResult(primaryResults, primary.sourceName, false)
+            if (failures.size == chain.size) {
+                throw IllegalStateException("H-Vault search could not reach any source. ${failures.joinToString(" • ")}")
             }
-
-            // 2. Fallback 1 — watchhentai.net
-            val fallbackResults = try {
-                fallback.search(query, page)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                failures += "${fallback.sourceName}: ${Sanitizer.clean(error.message, 100).ifBlank { "request failed" }}"
-                emptyList()
-            }
-
-            if (fallbackResults.isNotEmpty()) {
-                return@withContext SearchResult(fallbackResults, fallback.sourceName, true)
-            }
-
-            // 3. Fallback 2 — nhentai.net JSON API
-            val nhentaiResults = try {
-                nhentai.search(query, page)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                failures += "${nhentai.sourceName}: ${Sanitizer.clean(error.message, 100).ifBlank { "request failed" }}"
-                emptyList()
-            }
-            if (nhentaiResults.isEmpty() && failures.isNotEmpty()) {
-                throw IllegalStateException("H-Vault search could not reach its sources. ${failures.joinToString(" • ")}")
-            }
-            SearchResult(
-                entries      = nhentaiResults,
-                sourceName   = nhentai.sourceName,
-                usedFallback = nhentaiResults.isNotEmpty()
-            )
+            SearchResult(emptyList(), chain.last().sourceName, false)
         }
 
     // ── Detail fetch (tries all sources) ──────────────────────────────────

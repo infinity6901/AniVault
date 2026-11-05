@@ -11,19 +11,21 @@ import java.net.URLEncoder
  */
 class JikanAdapter(
     private val source: ApiSource,
-    private val http: HttpTransport
+    private val http: HttpTransport,
+    private val adult: Boolean = false
 ) : ProviderAdapter {
 
     override val sections: Set<BrowseSection> =
         setOf(BrowseSection.TRENDING, BrowseSection.POPULAR, BrowseSection.SEASONAL, BrowseSection.TOP_RATED)
 
+    private val SAFE get() = if (adult) "sfw=false&rating=rx" else "sfw=true"
     private val base get() = source.baseUrl.trimEnd('/')
 
     override suspend fun search(query: String, page: Int): PagedResult =
-        get("$base/anime?q=${URLEncoder.encode(query, "UTF-8")}&page=$page&limit=$PAGE_SIZE&sfw=true")
+        get("$base/anime?q=${URLEncoder.encode(query, "UTF-8")}&page=$page&limit=$PAGE_SIZE&$SAFE")
 
     override suspend fun browse(section: BrowseSection, page: Int): PagedResult {
-        val common = "page=$page&limit=$PAGE_SIZE&sfw=true"
+        val common = "page=$page&limit=$PAGE_SIZE&$SAFE"
         val url = when (section) {
             BrowseSection.TRENDING -> "$base/top/anime?filter=airing&$common"
             BrowseSection.POPULAR -> "$base/top/anime?filter=bypopularity&$common"
@@ -37,7 +39,7 @@ class JikanAdapter(
 
     override suspend fun check() {
         // get() validates the Jikan shape (a `data` list whose items have `title`).
-        get("$base/anime?q=naruto&limit=1&sfw=true")
+        get("$base/anime?q=naruto&limit=1&$SAFE")
     }
 
     private suspend fun get(url: String): PagedResult {

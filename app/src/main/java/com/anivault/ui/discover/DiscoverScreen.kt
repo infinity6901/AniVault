@@ -62,7 +62,8 @@ data class DiscoverUi(
 @HiltViewModel
 class DiscoverViewModel @Inject constructor(
     private val providers: ProviderRepository,
-    private val library: LibraryRepository
+    private val library: LibraryRepository,
+    private val backfill: com.anivault.data.library.DurationBackfill
 ) : ViewModel() {
     private val _ui = MutableStateFlow(DiscoverUi())
     val ui: StateFlow<DiscoverUi> = _ui.asStateFlow()
@@ -97,8 +98,14 @@ class DiscoverViewModel @Inject constructor(
 
     fun add(item: NormalizedAnime, status: WatchStatus?) {
         viewModelScope.launch {
-            val added = library.add(item, status)
-            _ui.update { it.copy(message = if (added) "Added “${item.title}”" else "Already in your library") }
+            val msg = try {
+                if (library.add(item, status).also { if (it) backfill.run() }) "Added “${item.title}”" else "Already in your library"
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                com.anivault.core.Sanitizer.clean(e.message).let { "Couldn't add to library: $it" }
+            }
+            _ui.update { it.copy(message = msg) }
         }
     }
 
@@ -155,9 +162,10 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background, snackbarHost = { SnackbarHost(snackbar) },
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             TopAppBar(title = { Text("Discover", fontWeight = FontWeight.Bold) }, actions = {
-                BadgedBox(badge = { val n = listOfNotNull(ui.filters.year, ui.filters.format, ui.filters.minScore).size; if (n > 0) Badge { Text("$n") } }) {
+                BadgedBox(badge = { val n = ui.filters.activeCount; if (n > 0) Badge { Text("$n") } }) {
                     IconButton(onClick = { showFilters = true }) { Icon(Icons.Default.FilterList, "Filters") }
                 }
             }, colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface))
@@ -259,27 +267,59 @@ private fun CatalogSheet(a: NormalizedAnime, inLibrary: Boolean, onAdd: (WatchSt
     }
 }
 
+private val GENRES = listOf(
+    "Action", "Adventure", "Comedy", "Drama", "Fantasy", "Horror", "Mystery", "Romance", "Sci-Fi",
+    "Slice of Life", "Sports", "Supernatural", "Thriller", "Mecha", "Music", "Psychological", "Ecchi"
+)
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DiscoverFilters(current: SearchFilters, onApply: (SearchFilters) -> Unit, onDismiss: () -> Unit) {
     var year by remember { mutableStateOf(current.year?.toString().orEmpty()) }
     var format by remember { mutableStateOf(current.format) }
     var minScore by remember { mutableStateOf(current.minScore) }
+    var genres by remember { mutableStateOf(current.genres) }
+    var airing by remember { mutableStateOf(current.airing) }
+    var country by remember { mutableStateOf(current.country) }
+    var minEps by remember { mutableStateOf(current.minEpisodes?.toString().orEmpty()) }
+    var maxEps by remember { mutableStateOf(current.maxEpisodes?.toString().orEmpty()) }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Filters", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-            Text("Applied to results on this device, so they behave the same on every source.", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
-            OutlinedTextField(year, { year = it.filter(Char::isDigit).take(4) }, label = { Text("Release year") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Text("Applied on this device to what each source returns. A filter only hides a title when the source reports that detail.", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
+            Text("Genres (must match all)", fontSize = 13.sp, color = MaterialTheme.colorScheme.dim)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GENRES.forEach { g -> FilterChip(g in genres, { genres = if (g in genres) genres - g else genres + g }, { Text(g) }) }
+            }
+            Text("Status", fontSize = 13.sp, color = MaterialTheme.colorScheme.dim)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("Releasing", "Finished", "Not yet released").forEach { st -> FilterChip(airing == st, { airing = if (airing == st) null else st }, { Text(st) }) }
+            }
+            Text("Original language / country", fontSize = 13.sp, color = MaterialTheme.colorScheme.dim)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("JP" to "Japanese", "CN" to "Chinese", "KR" to "Korean", "TW" to "Taiwanese").forEach { (code, label) ->
+                    FilterChip(country == code, { country = if (country == code) null else code }, { Text(label) })
+                }
+            }
+            Text("Sub/dub availability isn’t published by AniList, Kitsu or MyAnimeList, so it can’t be filtered here.", fontSize = 11.sp, color = MaterialTheme.colorScheme.dim)
             Text("Format", fontSize = 13.sp, color = MaterialTheme.colorScheme.dim)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(listOf("TV", "Movie", "OVA", "ONA", "Special")) { f -> FilterChip(format.equals(f, true), { format = if (format.equals(f, true)) null else f }, { Text(f) }) }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("TV", "Movie", "OVA", "ONA", "Special").forEach { f -> FilterChip(format.equals(f, true), { format = if (format.equals(f, true)) null else f }, { Text(f) }) }
             }
             Text("Minimum community score", fontSize = 13.sp, color = MaterialTheme.colorScheme.dim)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(listOf(6f, 7f, 8f, 9f)) { s -> FilterChip(minScore == s, { minScore = if (minScore == s) null else s }, { Text("${s.toInt()}+") }) }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(6f, 7f, 8f, 9f).forEach { sc -> FilterChip(minScore == sc, { minScore = if (minScore == sc) null else sc }, { Text("${sc.toInt()}+") }) }
+            }
+            OutlinedTextField(year, { year = it.filter(Char::isDigit).take(4) }, label = { Text("Release year") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(minEps, { minEps = it.filter(Char::isDigit).take(4) }, label = { Text("Min episodes") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(maxEps, { maxEps = it.filter(Char::isDigit).take(4) }, label = { Text("Max episodes") }, singleLine = true, modifier = Modifier.weight(1f))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { onApply(SearchFilters()) }, Modifier.weight(1f)) { Text("Reset") }
-                Button(onClick = { onApply(SearchFilters(year.toIntOrNull(), format, minScore)) }, Modifier.weight(1f)) { Text("Apply") }
+                Button(onClick = {
+                    onApply(SearchFilters(year.toIntOrNull(), format, minScore, genres, airing, country, minEps.toIntOrNull(), maxEps.toIntOrNull()))
+                }, Modifier.weight(1f)) { Text("Apply") }
             }
         }
     }

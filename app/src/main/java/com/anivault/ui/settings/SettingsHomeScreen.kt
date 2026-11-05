@@ -27,8 +27,8 @@ fun SettingsHomeScreen(onOpen: (String) -> Unit) {
         Category("H-Vault", "Biometric lock and privacy", Icons.Default.Lock, "vault"),
         Category("Appearance", "Theme, Material You, and UI", Icons.Default.Palette, "appearance"),
         Category("Advanced", "Network, cache, and debugging", Icons.Default.Tune, "advanced")
-    )
-    Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
+    ) + (if (com.anivault.BuildConfig.DEBUG) listOf(Category("Debug log", "View, save and share this app's logcat", Icons.Default.BugReport, "debuglog")) else emptyList())
+    Scaffold(containerColor = MaterialTheme.colorScheme.background, contentWindowInsets = WindowInsets(0, 0, 0, 0), topBar = {
         TopAppBar(title = { Text("Settings", fontWeight = FontWeight.Bold) }, colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface))
     }) { pad ->
         LazyColumn(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp), contentPadding = PaddingValues(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {

@@ -5,35 +5,36 @@ import com.google.gson.JsonObject
 /** AniList GraphQL adapter (public catalog queries need no key). Adult titles are excluded. */
 class AniListAdapter(
     private val source: ApiSource,
-    private val http: HttpTransport
+    private val http: HttpTransport,
+    private val adult: Boolean = false
 ) : ProviderAdapter {
 
     override val sections: Set<BrowseSection> = BrowseSection.values().toSet()
 
     override suspend fun search(query: String, page: Int): PagedResult {
-        val q = buildQuery("§search: String", "search: §search, sort: [SEARCH_MATCH]")
+        val q = buildQuery("§search: String", "search: §search, sort: [SEARCH_MATCH]", adult)
         return post(q, vars(page).also { it.addProperty("search", query) })
     }
 
     override suspend fun browse(section: BrowseSection, page: Int): PagedResult {
         val vars = vars(page)
         val q = when (section) {
-            BrowseSection.TRENDING -> buildQuery("", "sort: [TRENDING_DESC]")
-            BrowseSection.POPULAR -> buildQuery("", "sort: [POPULARITY_DESC]")
-            BrowseSection.TOP_RATED -> buildQuery("", "sort: [SCORE_DESC]")
-            BrowseSection.RECENTLY_UPDATED -> buildQuery("", "status: RELEASING, sort: [UPDATED_AT_DESC]")
+            BrowseSection.TRENDING -> buildQuery("", "sort: [TRENDING_DESC]", adult)
+            BrowseSection.POPULAR -> buildQuery("", "sort: [POPULARITY_DESC]", adult)
+            BrowseSection.TOP_RATED -> buildQuery("", "sort: [SCORE_DESC]", adult)
+            BrowseSection.RECENTLY_UPDATED -> buildQuery("", "status: RELEASING, sort: [UPDATED_AT_DESC]", adult)
             BrowseSection.SEASONAL -> {
                 val s = Seasons.current()
                 vars.addProperty("season", s.name)
                 vars.addProperty("seasonYear", s.year)
-                buildQuery("§season: MediaSeason, §seasonYear: Int", "season: §season, seasonYear: §seasonYear, sort: [POPULARITY_DESC]")
+                buildQuery("§season: MediaSeason, §seasonYear: Int", "season: §season, seasonYear: §seasonYear, sort: [POPULARITY_DESC]", adult)
             }
         }
         return post(q, vars)
     }
 
     override suspend fun check() {
-        post(buildQuery("", "sort: [POPULARITY_DESC]"), vars(1, perPage = 1))
+        post(buildQuery("", "sort: [POPULARITY_DESC]", adult), vars(1, perPage = 1))
     }
 
     private fun vars(page: Int, perPage: Int = PAGE_SIZE) = JsonObject().apply {
@@ -81,11 +82,11 @@ class AniListAdapter(
         /** "§" stands in for "$" so GraphQL variables don't collide with Kotlin templates. */
         fun gql(text: String): String = text.replace('§', '$')
 
-        private fun buildQuery(extraVarDecls: String, mediaArgs: String): String {
+        private fun buildQuery(extraVarDecls: String, mediaArgs: String, adult: Boolean = false): String {
             val decls = if (extraVarDecls.isBlank()) "" else ", $extraVarDecls"
             return gql(
                 "query (§page: Int, §perPage: Int$decls) { Page(page: §page, perPage: §perPage) { " +
-                    "pageInfo { hasNextPage } media(type: ANIME, isAdult: false, $mediaArgs) { $MEDIA_FIELDS } } }"
+                    "pageInfo { hasNextPage } media(type: ANIME, isAdult: $adult, $mediaArgs) { $MEDIA_FIELDS } } }"
             )
         }
 
@@ -120,6 +121,7 @@ class AniListAdapter(
                 status = prettyEnum(o.str("status")),
                 genres = o.arr("genres")?.strings() ?: emptyList(),
                 score = o.dbl("averageScore")?.let { (it / 10.0).toFloat() },
+                country = o.str("countryOfOrigin").orEmpty(),
                 remoteIds = remote
             )
         }

@@ -63,6 +63,13 @@ fun EntryDetailSheet(id: String, onDismiss: () -> Unit, vm: EntryDetailViewModel
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(e.title, fontWeight = FontWeight.Bold, fontSize = 19.sp)
                     Text(listOfNotNull(e.format.takeIf { it.isNotBlank() }, e.year?.toString(), e.airingStatus.takeIf { it.isNotBlank() }).joinToString(" · "), fontSize = 13.sp, color = MaterialTheme.colorScheme.dim)
+                    run {
+                        val per = com.anivault.data.library.StatsCalculator.effectiveMinutes(e).toLong()
+                        val approx = if (e.durationMinutes > 0) "" else "~"
+                        Text("$approx$per min/episode · watched $approx${formatDuration(e.watchedEpisodes * per)}" +
+                            (if (e.totalEpisodes > 0) " · left $approx${formatDuration((e.totalEpisodes - e.watchedEpisodes).coerceAtLeast(0) * per)}" else ""),
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
+                    }
                     if (e.providerScore > 0) Text("Community score ★ ${"%.1f".format(e.providerScore)}", fontSize = 13.sp)
                     if (e.sourceName.isNotBlank()) Text("Data from ${e.sourceName}", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
                     if (e.pendingSync) Text("Waiting to sync", fontSize = 12.sp, color = MaterialTheme.colorScheme.tertiary)

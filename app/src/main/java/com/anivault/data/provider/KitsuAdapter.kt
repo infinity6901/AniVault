@@ -6,26 +6,28 @@ import java.net.URLEncoder
 /** Kitsu JSON:API catalog adapter (no key needed). Excludes R18-rated titles. */
 class KitsuAdapter(
     private val source: ApiSource,
-    private val http: HttpTransport
+    private val http: HttpTransport,
+    private val adult: Boolean = false
 ) : ProviderAdapter {
 
     override val sections: Set<BrowseSection> =
         setOf(BrowseSection.TRENDING, BrowseSection.POPULAR, BrowseSection.SEASONAL, BrowseSection.TOP_RATED)
 
+    private val safe get() = if (adult) "filter[ageRating]=R18" else SAFE
     private val base get() = source.baseUrl.trimEnd('/')
 
     override suspend fun search(query: String, page: Int): PagedResult =
-        get("$base/anime?filter[text]=${URLEncoder.encode(query, "UTF-8")}&page[limit]=$PAGE_SIZE&page[offset]=${offset(page)}&$SAFE")
+        get("$base/anime?filter[text]=${URLEncoder.encode(query, "UTF-8")}&page[limit]=$PAGE_SIZE&page[offset]=${offset(page)}&$safe")
 
     override suspend fun browse(section: BrowseSection, page: Int): PagedResult {
         val paging = "page[limit]=$PAGE_SIZE&page[offset]=${offset(page)}"
         val url = when (section) {
-            BrowseSection.TRENDING -> "$base/trending/anime?limit=$PAGE_SIZE"
-            BrowseSection.POPULAR -> "$base/anime?sort=-userCount&$paging&$SAFE"
-            BrowseSection.TOP_RATED -> "$base/anime?sort=-averageRating&$paging&$SAFE"
+            BrowseSection.TRENDING -> if (adult) "$base/anime?sort=-userCount&$paging&$safe" else "$base/trending/anime?limit=$PAGE_SIZE"
+            BrowseSection.POPULAR -> "$base/anime?sort=-userCount&$paging&$safe"
+            BrowseSection.TOP_RATED -> "$base/anime?sort=-averageRating&$paging&$safe"
             BrowseSection.SEASONAL -> {
                 val s = Seasons.current()
-                "$base/anime?filter[season]=${s.name.lowercase()}&filter[seasonYear]=${s.year}&sort=-userCount&$paging&$SAFE"
+                "$base/anime?filter[season]=${s.name.lowercase()}&filter[seasonYear]=${s.year}&sort=-userCount&$paging&$safe"
             }
             BrowseSection.RECENTLY_UPDATED ->
                 throw ProviderException(FailureKind.UNSUPPORTED, "${source.name} does not offer “${section.label}”")
@@ -34,7 +36,7 @@ class KitsuAdapter(
     }
 
     override suspend fun check() {
-        get("$base/anime?page[limit]=1&$SAFE")
+        get("$base/anime?page[limit]=1&$safe")
     }
 
     private fun offset(page: Int) = (page - 1).coerceAtLeast(0) * PAGE_SIZE
