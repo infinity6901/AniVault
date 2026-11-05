@@ -12,6 +12,20 @@ import javax.inject.Singleton
 
 /** Pure progress rules (spec §8) so they can be unit-tested without a database. */
 object ProgressRules {
+    /**
+     * Applies a status chosen by the user. Completed means "watched all of it", so a known episode
+     * count is filled in and the finish date set; leaving Completed keeps the progress as it was.
+     */
+    fun withStatus(entry: AnimeEntry, status: WatchStatus, now: Long): AnimeEntry {
+        if (status != WatchStatus.COMPLETED) return entry.copy(status = status)
+        return entry.copy(
+            status = status,
+            watchedEpisodes = if (entry.totalEpisodes > 0) entry.totalEpisodes else entry.watchedEpisodes,
+            startDate = entry.startDate ?: now,
+            endDate = entry.endDate ?: now
+        )
+    }
+
     /** Result of moving an entry to [watched] episodes. Idempotent: the same input gives the same output. */
     fun apply(entry: AnimeEntry, watched: Int, autoComplete: Boolean, now: Long): AnimeEntry {
         val max = if (entry.totalEpisodes > 0) entry.totalEpisodes else Int.MAX_VALUE
@@ -57,7 +71,7 @@ class LibraryRepository @Inject constructor(
         val id = anime.canonicalId
         if (dao.getById(id) != null) return false
         val chosen = status ?: WatchStatus.parse(prefs.defaultAddStatus)
-        dao.upsert(anime.toEntry(chosen))
+        dao.upsert(ProgressRules.withStatus(anime.toEntry(chosen), chosen, System.currentTimeMillis()))
         return true
     }
 
@@ -76,7 +90,11 @@ class LibraryRepository @Inject constructor(
     }
 
     suspend fun setStatus(ids: List<String>, status: WatchStatus) {
-        if (ids.isNotEmpty()) dao.updateStatusForIds(ids, status)
+        if (ids.isEmpty()) return
+        if (status == WatchStatus.COMPLETED) {
+            val now = System.currentTimeMillis()
+            ids.mapNotNull { dao.getById(it) }.forEach { dao.upsert(ProgressRules.withStatus(it, status, now).copy(updatedAt = now, pendingSync = true)) }
+        } else dao.updateStatusForIds(ids, status)
     }
 
     /** Deletes and returns the removed rows so the UI can offer Undo. */

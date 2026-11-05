@@ -111,6 +111,7 @@ class MainActivity : FragmentActivity() {
         val route = entry?.destination?.route
         val showBar = route in setOf(R_.HOME, R_.LIBRARY_ARG, R_.DISCOVER, R_.SETTINGS)
         var detailId by remember { mutableStateOf<String?>(null) }
+        var catalogItem by remember { mutableStateOf<com.anivault.data.provider.NormalizedAnime?>(null) }
 
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
@@ -133,7 +134,7 @@ class MainActivity : FragmentActivity() {
                         onOpenDiscover = { goTab(nav, R_.DISCOVER) },
                         onOpenStats = { nav.navigate(R_.STATS) },
                         onOpenEntry = { detailId = it },
-                        onOpenCatalog = { goTab(nav, R_.DISCOVER) }
+                        onOpenCatalog = { catalogItem = it }
                     )
                 }
                 composable(R_.LIBRARY_ARG, arguments = listOf(navArgument("status") { type = NavType.StringType; defaultValue = "ALL" })) {
@@ -160,6 +161,7 @@ class MainActivity : FragmentActivity() {
             }
         }
         detailId?.let { EntryDetailSheet(it, onDismiss = { detailId = null }) }
+        catalogItem?.let { com.anivault.ui.discover.CatalogDetailHost(it, onDismiss = { catalogItem = null }) }
     }
 
     private fun goTab(nav: NavHostController, route: String) {

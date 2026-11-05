@@ -37,6 +37,7 @@ class AdapterFactory @Inject constructor(
         AnimeApiType.JIKAN_COMPATIBLE -> JikanAdapter(source, transport)
         AnimeApiType.MAL_V2 -> MalAdapter(source, transport) { store.clientId(source.id) }
         AnimeApiType.KITSU_JSON_API -> KitsuAdapter(source, transport)
+        AnimeApiType.JIKAN_EDGE -> JikanEdgeAdapter(source, transport)
     }
 }
 

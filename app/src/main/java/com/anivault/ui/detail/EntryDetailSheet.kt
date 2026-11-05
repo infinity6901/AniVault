@@ -77,7 +77,7 @@ fun EntryDetailSheet(id: String, onDismiss: () -> Unit, vm: EntryDetailViewModel
             }
             Text("Status", color = MaterialTheme.colorScheme.dim, fontSize = 13.sp)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                WatchStatus.values().forEach { s -> FilterChip(e.status == s, { draft = e.copy(status = s) }, { Text(s.label) }) }
+                WatchStatus.values().forEach { s -> FilterChip(e.status == s, { draft = ProgressRules.withStatus(e, s, System.currentTimeMillis()) }, { Text(s.label) }) }
             }
             Text("Progress", color = MaterialTheme.colorScheme.dim, fontSize = 13.sp)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

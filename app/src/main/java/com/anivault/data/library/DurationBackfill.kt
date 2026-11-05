@@ -29,6 +29,10 @@ class DurationBackfill @Inject constructor(
         if (!running.compareAndSet(false, true)) return
         scope.launch {
             try {
+                // Earlier versions saved Completed titles with 0 episodes watched; make them consistent.
+                val now = System.currentTimeMillis()
+                dao.getAll().filter { it.status == com.anivault.data.local.model.WatchStatus.COMPLETED && it.totalEpisodes > 0 && it.watchedEpisodes < it.totalEpisodes }
+                    .forEach { dao.upsert(it.copy(watchedEpisodes = it.totalEpisodes, endDate = it.endDate ?: now, updatedAt = now, pendingSync = true)) }
                 val missing = dao.getAll().filter { it.durationMinutes <= 0 }.take(maxEntries)
                 for (e in missing) {
                     val result = providers.search(e.title) as? ProviderResult.Success ?: continue
