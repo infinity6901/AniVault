@@ -121,6 +121,7 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             if (ui.selecting) {
                 TopAppBar(

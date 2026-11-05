@@ -17,6 +17,23 @@ crash_excerpt() { # $1=logcat file
   grep -E -B1 -A14 'FATAL EXCEPTION|Fatal signal|ANR in '"${APP_ID//./\\.}" "$1" | head -n 60
 }
 
+# Taps the first UI node whose text/content-desc contains $1. Returns 1 when none is found.
+tap_text() {
+  adb shell uiautomator dump /sdcard/ui-tap.xml >/dev/null 2>&1 || return 1
+  local xy
+  xy="$(adb exec-out cat /sdcard/ui-tap.xml | python3 -c '
+import re,sys
+want=sys.argv[1].lower()
+x=sys.stdin.read()
+for m in re.finditer(r"<node[^>]*?text=\"([^\"]*)\"[^>]*?content-desc=\"([^\"]*)\"[^>]*?bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"",x):
+    t,d,a,b,c,e=m.groups()
+    if want in (t+" "+d).lower():
+        print((int(a)+int(c))//2,(int(b)+int(e))//2); break
+' "$1")"
+  [[ -n "$xy" ]] || return 1
+  adb shell input tap $xy; return 0
+}
+
 smoke_one() {
   local label="$1" apk="$2" safe
   safe="$(echo "$label" | tr -c 'a-zA-Z0-9_\n-' '_')"
@@ -56,6 +73,18 @@ smoke_one() {
     fi
     if ! grep -q "$APP_ID" "$OUT/activities-$safe.txt"; then
       record "$label" FAIL "app activity not found in activity dump"; return
+    fi
+
+    # Real user flow: Discover -> open a result -> Add to library. Fails only on a crash.
+    adb logcat -c
+    tap_text "Discover" && sleep 10 || echo "(Discover tab not found)"
+    adb shell input tap 540 520; sleep 3   # first result row (layout-independent best effort)
+    adb exec-out screencap -p > "$OUT/screenshot-$safe-sheet.png" 2>/dev/null || true
+    if tap_text "Add to library"; then echo "(tapped Add to library)"; sleep 3; else echo "(Add to library button not on screen - network or layout)"; fi
+    adb exec-out screencap -p > "$OUT/screenshot-$safe-added.png" 2>/dev/null || true
+    adb logcat -d -v threadtime > "$OUT/logcat-$safe-add.txt" || true
+    if grep -Eq "Process: ${APP_ID//./\\.}|ANR in ${APP_ID//./\\.}|Fatal signal" "$OUT/logcat-$safe-add.txt" || ! adb shell pidof "$APP_ID" | tr -d '\r' | grep -Eq '[0-9]'; then
+      record "$label" FAIL "crash during Discover/add-to-library flow (see logcat-$safe-add.txt)"; crash_excerpt "$OUT/logcat-$safe-add.txt"; return
     fi
 
     # Light UI stress: pseudo-random input, fixed seed. Fails only on crash/ANR.

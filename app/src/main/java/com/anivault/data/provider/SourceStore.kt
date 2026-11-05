@@ -131,8 +131,13 @@ class SourceStore @Inject constructor(
             // Older builds stored the MAL Client ID in plain JSON; move it into encrypted storage.
             val legacyClientId = o.optString("clientId", "")
             if (legacyClientId.isNotBlank() && !hasClientId(id)) setClientId(id, legacyClientId)
+            // The old community "Jikan-Edge" host answers 404; move it to the official public Jikan API.
+            val migrated = id == "jikan-edge" && o.optString("baseUrl").contains("lucashdo")
             out += ApiSource(
-                id = id, name = o.optString("name", id), baseUrl = o.optString("baseUrl"), type = type,
+                id = id,
+                name = if (migrated) "Jikan (MyAnimeList)" else o.optString("name", id),
+                baseUrl = if (migrated) "https://api.jikan.moe/v4" else o.optString("baseUrl"),
+                type = type,
                 enabled = o.optBoolean("enabled", true), builtIn = o.optBoolean("builtIn", false),
                 verified = o.optBoolean("verified", false), lastCheckedAt = o.optLong("lastCheckedAt", 0L),
                 lastStatus = o.optString("lastStatus", ""), lastError = o.optString("lastError", "")
@@ -169,7 +174,7 @@ class SourceStore @Inject constructor(
             ApiSource("mal", "MyAnimeList (MAL)", "https://api.myanimelist.net/v2", AnimeApiType.MAL_V2, enabled = false, builtIn = true),
             ApiSource("kitsu", "Kitsu", "https://kitsu.io/api/edge", AnimeApiType.KITSU_JSON_API, enabled = true, builtIn = true),
             ApiSource("tenrai", "Tenrai API", "https://api.tenrai.org/v1", AnimeApiType.JIKAN_COMPATIBLE, enabled = false, builtIn = true),
-            ApiSource("jikan-edge", "Jikan-Edge", "https://jikan.lucashdo.com/v4", AnimeApiType.JIKAN_COMPATIBLE, enabled = false, builtIn = true)
+            ApiSource("jikan-edge", "Jikan (MyAnimeList)", "https://api.jikan.moe/v4", AnimeApiType.JIKAN_COMPATIBLE, enabled = false, builtIn = true)
         )
     }
 }

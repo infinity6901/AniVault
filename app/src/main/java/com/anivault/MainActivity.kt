@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -113,6 +114,7 @@ class MainActivity : FragmentActivity() {
 
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
                 if (showBar) NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                     tabs.forEach { t ->
@@ -151,6 +153,7 @@ class MainActivity : FragmentActivity() {
                         "backup" -> BackupScreen(back)
                         "vault" -> VaultSettingsScreen(back, onOpenVault = { nav.navigate(R_.VAULT) })
                         "appearance" -> AppearanceScreen(back)
+                        "debuglog" -> if (BuildConfig.DEBUG) com.anivault.ui.settings.DebugLogScreen(back) else AdvancedScreen(back)
                         else -> AdvancedScreen(back)
                     }
                 }

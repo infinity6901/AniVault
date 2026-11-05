@@ -74,6 +74,8 @@ data class NormalizedAnime(
     val genres: List<String> = emptyList(),
     /** Community score on a 0–10 scale, or null. */
     val score: Float? = null,
+    /** ISO country of origin (JP/CN/KR/TW) when the provider reports it, else blank. */
+    val country: String = "",
     /** Cross-service ids: "anilist", "mal", "kitsu". */
     val remoteIds: Map<String, String> = emptyMap()
 ) {
@@ -87,12 +89,38 @@ data class PagedResult(val items: List<NormalizedAnime>, val hasNext: Boolean)
 data class SearchFilters(
     val year: Int? = null,
     val format: String? = null,
-    val minScore: Float? = null
+    val minScore: Float? = null,
+    val genres: Set<String> = emptySet(),
+    /** Normalised airing status: "Releasing", "Finished", "Not yet released" or null for any. */
+    val airing: String? = null,
+    /** Country of origin code (JP, CN, KR, TW); applied only to results that report one. */
+    val country: String? = null,
+    val minEpisodes: Int? = null,
+    val maxEpisodes: Int? = null
 ) {
+    val activeCount: Int get() = listOfNotNull(year, format, minScore, airing, country, minEpisodes, maxEpisodes).size + (if (genres.isEmpty()) 0 else 1)
+
     fun apply(items: List<NormalizedAnime>): List<NormalizedAnime> = items.filter { a ->
         (year == null || a.year == year) &&
             (format.isNullOrBlank() || a.format.equals(format, ignoreCase = true)) &&
-            (minScore == null || (a.score ?: 0f) >= minScore)
+            (minScore == null || (a.score ?: 0f) >= minScore) &&
+            (genres.isEmpty() || a.genres.isEmpty() || genres.all { g -> a.genres.any { it.equals(g, ignoreCase = true) } }) &&
+            (airing == null || a.status.isBlank() || normalizeAiring(a.status) == airing) &&
+            (country == null || a.country.isBlank() || a.country.equals(country, ignoreCase = true)) &&
+            (minEpisodes == null || a.episodes >= minEpisodes) &&
+            (maxEpisodes == null || a.episodes == 0 || a.episodes <= maxEpisodes)
+    }
+
+    companion object {
+        fun normalizeAiring(raw: String): String {
+            val s = raw.lowercase()
+            return when {
+                "finish" in s || "complet" in s -> "Finished"
+                "not yet" in s || "not_yet" in s || "upcoming" in s || "tba" in s || "unreleased" in s -> "Not yet released"
+                "releas" in s || "airing" in s || "ongoing" in s || "current" in s -> "Releasing"
+                else -> ""
+            }
+        }
     }
 }
 

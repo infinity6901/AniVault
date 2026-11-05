@@ -2,7 +2,10 @@ package com.anivault.ui.home
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -47,7 +50,7 @@ data class HomeState(
     val total: Int = 0,
     val planned: Int = 0,
     val continueWatching: List<AnimeEntry> = emptyList(),
-    val banner: NormalizedAnime? = null,
+    val banners: List<NormalizedAnime> = emptyList(),
     val bannerLoading: Boolean = true,
     val showPlusOne: Boolean = true
 )
@@ -56,9 +59,10 @@ data class HomeState(
 class HomeViewModel @Inject constructor(
     private val library: LibraryRepository,
     private val providers: ProviderRepository,
-    private val prefs: AppPrefs
+    private val prefs: AppPrefs,
+    private val backfill: com.anivault.data.library.DurationBackfill
 ) : ViewModel() {
-    private val banner = MutableStateFlow<NormalizedAnime?>(null)
+    private val banner = MutableStateFlow<List<NormalizedAnime>>(emptyList())
     private val bannerLoading = MutableStateFlow(true)
 
     val state: StateFlow<HomeState> = combine(
@@ -67,14 +71,14 @@ class HomeViewModel @Inject constructor(
     ) { total, planned, cont, b, loading -> HomeState(total, planned, cont, b, loading, prefs.showPlusOne) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeState())
 
-    init { loadBanner() }
+    init { loadBanner(); backfill.run() }
 
     /** The banner is whatever the providers say is trending – never hard-coded art. */
     fun loadBanner() {
         viewModelScope.launch {
             bannerLoading.value = true
             val r = providers.browse(BrowseSection.TRENDING)
-            banner.value = (r as? ProviderResult.Success)?.items?.firstOrNull { it.bannerUrl.isNotBlank() || it.coverUrl.isNotBlank() }
+            banner.value = (r as? ProviderResult.Success)?.items.orEmpty().filter { it.bannerUrl.isNotBlank() || it.coverUrl.isNotBlank() }.take(10)
             bannerLoading.value = false
         }
     }
@@ -92,9 +96,9 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val s by viewModel.state.collectAsStateWithLifecycle()
-    LazyColumn(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+    LazyColumn(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item { Text("AniVault", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground) }
-        item { Banner(s.banner, s.bannerLoading, onClick = { s.banner?.let(onOpenCatalog) }, onRetry = viewModel::loadBanner) }
+        item { BannerPager(s.banners, s.bannerLoading, onOpen = onOpenCatalog, onRetry = viewModel::loadBanner) }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -120,6 +124,31 @@ fun HomeScreen(
                 items(s.continueWatching, key = { it.id }) { e ->
                     ContinueCard(e, s.showPlusOne, onClick = { onOpenEntry(e.id) }, onPlusOne = { viewModel.plusOne(e.id) })
                 }
+            }
+        }
+    }
+}
+
+/** Swipe sideways through the trending titles; dots show the position. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BannerPager(items: List<NormalizedAnime>, loading: Boolean, onOpen: (NormalizedAnime) -> Unit, onRetry: () -> Unit) {
+    if (items.isEmpty()) {
+        Banner(null, loading, onClick = {}, onRetry = onRetry)
+        return
+    }
+    val pager = rememberPagerState(pageCount = { items.size })
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        HorizontalPager(pager, Modifier.fillMaxWidth(), pageSpacing = 12.dp) { i ->
+            Banner(items[i], false, onClick = { onOpen(items[i]) }, onRetry = onRetry)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+            repeat(items.size) { i ->
+                val on = pager.currentPage == i
+                Box(
+                    Modifier.padding(3.dp).size(if (on) 8.dp else 6.dp).clip(RoundedCornerShape(50))
+                        .background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+                )
             }
         }
     }
