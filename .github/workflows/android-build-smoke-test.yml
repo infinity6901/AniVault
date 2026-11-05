@@ -61,7 +61,7 @@ jobs:
             echo "## Plan"
             echo "1. **Gate 1** – debug build, unit tests, lint"
             echo "2. **Release APK (R8)** – minified FOSS release build, in parallel"
-            echo "3. **Stage 2** – verify signatures, then emulator smoke test of both APKs"
+            echo "3. **Stage 2** – verify signatures of every APK, then emulator smoke test (universal debug + x86_64 release)"
             echo "4. **QA + failure report** – always runs"
             echo "5. **Publish GitHub Release** – this run: \`$p\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -93,7 +93,8 @@ jobs:
         run: |
           set -o pipefail
           ./gradlew --no-daemon --stacktrace :app:assembleDebug 2>&1 | tee "$DIAG_DIR/gradle-build-debug.log"
-          cp app/build/outputs/apk/debug/app-debug.apk apks/AniVault-debug.apk
+          ls -l app/build/outputs/apk/debug/
+          cp app/build/outputs/apk/debug/app-universal-debug.apk apks/AniVault-debug-universal.apk
       - name: Unit tests and lint
         id: checks
         continue-on-error: true
@@ -144,7 +145,11 @@ jobs:
         run: |
           set -o pipefail
           ./gradlew --no-daemon --stacktrace :app:assembleRelease 2>&1 | tee "$DIAG_DIR/gradle-build-release.log"
-          cp app/build/outputs/apk/release/app-release.apk apks/AniVault-foss-release.apk
+          ls -l app/build/outputs/apk/release/
+          for f in app/build/outputs/apk/release/app-*-release.apk; do
+            abi="$(basename "$f" -release.apk)"; abi="${abi#app-}"
+            cp "$f" "apks/AniVault-foss-release-$abi.apk"
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: apk-release, path: apks/*.apk, if-no-files-found: ignore, retention-days: 14 }
@@ -178,7 +183,7 @@ jobs:
         run: |
           mkdir -p "$REPORT_DIR" "$DIAG_DIR"
           set -o pipefail
-          DEBUG_KEYSTORE="$PWD/keystore/debug.keystore" scripts/verify-apks.sh apks/AniVault-debug.apk apks/AniVault-foss-release.apk 2>&1 | tee "$DIAG_DIR/verify-apks.log"
+          DEBUG_KEYSTORE="$PWD/keystore/debug.keystore" scripts/verify-apks.sh apks/*.apk 2>&1 | tee "$DIAG_DIR/verify-apks.log"
       - name: Enable KVM for the emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -197,7 +202,7 @@ jobs:
           emulator-boot-timeout: 600
           emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -memory 3072
           # One line only: the action runs each script line in its own shell.
-          script: bash scripts/smoke-test.sh "Debug APK=apks/AniVault-debug.apk" "FOSS release APK=apks/AniVault-foss-release.apk"
+          script: bash scripts/smoke-test.sh "Debug APK (universal)=apks/AniVault-debug-universal.apk" "FOSS release APK (x86_64)=apks/AniVault-foss-release-x86_64.apk"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -279,5 +284,5 @@ jobs:
           else
             gh release create "v1.1.0-ci.${{ github.run_number }}" apks/*.apk --prerelease --target "${{ github.sha }}" \
               --title "AniVault CI build #${{ github.run_number }}" \
-              --notes "Debug-signed FOSS builds from commit ${{ github.sha }}. Not for the Play Store."
+              --notes "Debug-signed FOSS builds (one APK per architecture: arm64-v8a is right for most phones; universal works everywhere) from commit ${{ github.sha }}. Not for the Play Store."
           fi
