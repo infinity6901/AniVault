@@ -131,5 +131,7 @@ dependencies {
 
     // ── Unit tests (pure JVM) ──────────────────────────────────────────────
     testImplementation(libs.junit)
+    // Android's org.json is a stub in JVM unit tests; use the real implementation there.
+    testImplementation("org.json:json:20231013")
     testImplementation(libs.coroutines.test)
 }
