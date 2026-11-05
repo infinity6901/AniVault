@@ -17,7 +17,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /** Rows that were replaced by the last restore, kept in memory so it can be undone this session. */
-private class Snapshot(val anime: List<AnimeEntry>, val hvault: List<HVaultEntry>?, val settings: Map<String, String>?)
+private class Snapshot(val anime: List<AnimeEntry>, val hvault: List<HVaultEntry>?, val settings: Map<String, String>?, val secrets: Map<String, String>? = null)
 
 @Singleton
 class BackupManager @Inject constructor(
@@ -25,17 +25,19 @@ class BackupManager @Inject constructor(
     private val db: AppDatabase,
     private val animeDao: AnimeDao,
     private val vaultDao: HVaultDao,
-    private val prefs: AppPrefs
+    private val prefs: AppPrefs,
+    private val accounts: com.anivault.data.sync.AccountManager
 ) {
     @Volatile private var snapshot: Snapshot? = null
     val canUndoRestore: Boolean get() = snapshot != null
 
-    suspend fun export(uri: Uri, password: CharArray, includeHVault: Boolean, includeSettings: Boolean) = withContext(Dispatchers.IO) {
+    suspend fun export(uri: Uri, password: CharArray, includeHVault: Boolean, includeSettings: Boolean, includeSecrets: Boolean = false) = withContext(Dispatchers.IO) {
         val payload = BackupPayload(
             appVersion = BuildConfig.VERSION_NAME,
             anime = animeDao.getAll().map { it.copy(pendingSync = false) },
             hvault = if (includeHVault) vaultDao.getAll() else null,
-            settings = if (includeSettings) readSettings() else null
+            settings = if (includeSettings) readSettings() else null,
+            secrets = if (includeSecrets) accounts.exportCredentials() else null
         )
         val bytes = BackupCodec.encrypt(payload, password)
         // "wt" truncates; encrypt happens first so a bad password can never leave an empty file behind.
@@ -55,12 +57,13 @@ class BackupManager @Inject constructor(
      * Applies [payload] inside one database transaction: if anything fails the library is exactly as it was.
      * H-Vault rows are only touched when [includeHVault] is true AND the backup contains them.
      */
-    suspend fun restore(payload: BackupPayload, mode: RestoreMode, includeHVault: Boolean, includeSettings: Boolean) =
+    suspend fun restore(payload: BackupPayload, mode: RestoreMode, includeHVault: Boolean, includeSettings: Boolean, includeSecrets: Boolean = false) =
         withContext(Dispatchers.IO) {
             val before = Snapshot(
                 animeDao.getAll(),
                 if (includeHVault && payload.hvault != null) vaultDao.getAll() else null,
-                if (includeSettings && payload.settings != null) readSettings() else null
+                if (includeSettings && payload.settings != null) readSettings() else null,
+                if (includeSecrets && payload.secrets != null) accounts.exportCredentials() else null
             )
             db.withTransaction {
                 when (mode) {
@@ -76,6 +79,7 @@ class BackupManager @Inject constructor(
                 }
             }
             if (before.settings != null) writeSettings(payload.settings!!)
+            if (before.secrets != null) accounts.importCredentials(payload.secrets!!)
             snapshot = before
         }
 
@@ -87,6 +91,7 @@ class BackupManager @Inject constructor(
             if (s.hvault != null) { vaultDao.deleteAll(); vaultDao.upsertAll(s.hvault) }
         }
         s.settings?.let { writeSettings(it) }
+        s.secrets?.let { accounts.importCredentials(it) }
         snapshot = null
         true
     }

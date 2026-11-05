@@ -92,6 +92,7 @@ class MalAdapter(
             status = prettyEnum(n.str("status")),
             genres = n.arr("genres")?.objects()?.mapNotNull { it.str("name") } ?: emptyList(),
             score = n.dbl("mean")?.toFloat(),
+            adult = n.str("nsfw") == "black" || n.str("rating").equals("rx", ignoreCase = true),
             remoteIds = mapOf("mal" to id)
         )
     }
@@ -105,6 +106,6 @@ class MalAdapter(
         private const val PAGE_SIZE = 20
         const val FIELDS =
             "id,title,alternative_titles,main_picture,synopsis,mean,genres,num_episodes," +
-                "average_episode_duration,start_season,start_date,media_type,status"
+                "average_episode_duration,start_season,start_date,media_type,status,nsfw,rating"
     }
 }
