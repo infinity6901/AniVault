@@ -82,6 +82,7 @@ class KitsuAdapter(
             durationMinutes = a.int("episodeLength") ?: 0,
             status = prettyEnum(a.str("status")),
             score = a.str("averageRating")?.toDoubleOrNull()?.let { (it / 10.0).toFloat() },
+            adult = a.str("nsfw") == "true" || a.str("ageRating").equals("R18", ignoreCase = true),
             remoteIds = mapOf("kitsu" to id)
         )
     }

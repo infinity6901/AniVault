@@ -158,7 +158,7 @@ class MalAccountApi(private val http: HttpTransport) : AccountApi {
         val out = ArrayList<RemoteListEntry>()
         var offset = 0
         repeat(MAX_PAGES) {
-            val url = "$base/users/@me/animelist?fields=list_status,${MalAdapter.FIELDS}&limit=$PAGE&offset=$offset&nsfw=false"
+            val url = "$base/users/@me/animelist?fields=list_status,${MalAdapter.FIELDS}&limit=$PAGE&offset=$offset&nsfw=1"
             val res = http.execute(HttpRequestSpec(url, headers = auth(token)))
             HttpErrors.check(res, "MyAnimeList")
             val root = HttpErrors.parse(res.body, "MyAnimeList").asObjOrNull()

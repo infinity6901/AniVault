@@ -77,7 +77,7 @@ class AniListAdapter(
         const val MEDIA_FIELDS =
             "id idMal title { romaji english native } synonyms coverImage { extraLarge large } bannerImage " +
                 "description(asHtml: false) format status episodes duration season seasonYear " +
-                "startDate { year month day } genres averageScore"
+                "startDate { year month day } genres averageScore countryOfOrigin isAdult"
 
         /** "§" stands in for "$" so GraphQL variables don't collide with Kotlin templates. */
         fun gql(text: String): String = text.replace('§', '$')
@@ -122,6 +122,7 @@ class AniListAdapter(
                 genres = o.arr("genres")?.strings() ?: emptyList(),
                 score = o.dbl("averageScore")?.let { (it / 10.0).toFloat() },
                 country = o.str("countryOfOrigin").orEmpty(),
+                adult = o.str("isAdult") == "true",
                 remoteIds = remote
             )
         }

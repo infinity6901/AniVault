@@ -21,7 +21,9 @@ data class BackupPayload(
     val anime: List<AnimeEntry> = emptyList(),
     val hvault: List<HVaultEntry>? = null,
     /** Non-secret preferences only (see AppPrefs.BACKUP_KEYS). Values are strings/booleans/numbers. */
-    val settings: Map<String, String>? = null
+    val settings: Map<String, String>? = null,
+    /** Sign-in tokens and client IDs. Only present when the user chose to include them; the file is password-encrypted. */
+    val secrets: Map<String, String>? = null
 )
 
 /**
@@ -103,7 +105,8 @@ data class BackupPreview(
     val hvaultConflicts: Int,
     val hasSettings: Boolean,
     /** Entries that only exist on this device; deleted by Replace, kept by Merge. */
-    val animeOnlyHere: Int
+    val animeOnlyHere: Int,
+    val hasSecrets: Boolean = false
 )
 
 enum class RestoreMode { MERGE, REPLACE }
@@ -129,7 +132,8 @@ object BackupPlanner {
         return BackupPreview(
             createdAt = p.createdAt, animeInBackup = p.anime.size, animeNew = n, animeConflicts = c, animeIdentical = same,
             hvaultInBackup = p.hvault?.size, hvaultNew = hn, hvaultConflicts = hc, hasSettings = !p.settings.isNullOrEmpty(),
-            animeOnlyHere = localAnime.count { it.id !in bIds }
+            animeOnlyHere = localAnime.count { it.id !in bIds },
+            hasSecrets = !p.secrets.isNullOrEmpty()
         )
     }
 

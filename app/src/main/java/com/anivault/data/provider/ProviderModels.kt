@@ -79,6 +79,8 @@ data class NormalizedAnime(
     val score: Float? = null,
     /** ISO country of origin (JP/CN/KR/TW) when the provider reports it, else blank. */
     val country: String = "",
+    /** True when the service marks the title as adult (AniList isAdult, MAL nsfw/rx, Kitsu R18/nsfw). */
+    val adult: Boolean = false,
     /** Cross-service ids: "anilist", "mal", "kitsu". */
     val remoteIds: Map<String, String> = emptyMap()
 ) {

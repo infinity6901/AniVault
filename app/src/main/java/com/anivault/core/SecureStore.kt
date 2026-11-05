@@ -47,6 +47,17 @@ class SecureStore @Inject constructor(@ApplicationContext context: Context) {
         editor.apply()
     }
 
+    /** Every readable secret whose key starts with one of [prefixes]. */
+    @Synchronized
+    fun snapshot(prefixes: List<String>): Map<String, String> =
+        prefs.all.keys.filter { k -> prefixes.any { k.startsWith(it) } }
+            .mapNotNull { k -> get(k)?.let { k to it } }.toMap()
+
+    @Synchronized
+    fun restore(values: Map<String, String>, prefixes: List<String>) {
+        values.filterKeys { k -> prefixes.any { k.startsWith(it) } }.forEach { (k, v) -> put(k, v) }
+    }
+
     private fun seal(plain: ByteArray): ByteArray {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, key())

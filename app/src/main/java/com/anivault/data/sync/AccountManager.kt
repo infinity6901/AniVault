@@ -265,6 +265,25 @@ class AccountManager @Inject constructor(
 
     private fun refresh() { _states.value = readAll() }
 
+    /**
+     * Sign-ins and client IDs for an encrypted backup: tokens, refresh tokens, expiry, client IDs
+     * (accounts and MyAnimeList sources) plus the account names they belong to ("meta:" keys).
+     */
+    fun exportCredentials(): Map<String, String> {
+        val out = LinkedHashMap(secure.snapshot(SECRET_PREFIXES))
+        meta.all.forEach { (k, v) -> if (k.startsWith("name:") || k.startsWith("id:")) out["meta:$k"] = v.toString() }
+        return out
+    }
+
+    fun importCredentials(values: Map<String, String>) {
+        secure.restore(values, SECRET_PREFIXES)
+        val e = meta.edit()
+        values.forEach { (k, v) -> if (k.startsWith("meta:")) e.putString(k.removePrefix("meta:"), v) }
+        values.keys.filter { it.startsWith("acct_token:") }.forEach { e.remove("reauth:${it.removePrefix("acct_token:")}") }
+        e.apply()
+        refresh()
+    }
+
     private fun readAll(): Map<AccountProvider, AccountState> = AccountProvider.values().associateWith { p ->
         AccountState(
             provider = p,
@@ -281,5 +300,9 @@ class AccountManager @Inject constructor(
         val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
         val rnd = SecureRandom()
         return buildString { repeat(len) { append(chars[rnd.nextInt(chars.length)]) } }
+    }
+
+    private companion object {
+        val SECRET_PREFIXES = listOf("acct_token:", "acct_refresh:", "acct_expires:", "acct_client:", "mal_client_id:")
     }
 }

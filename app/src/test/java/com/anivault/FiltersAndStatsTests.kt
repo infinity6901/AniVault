@@ -61,4 +61,14 @@ class FiltersAndStatsTests {
         assertEquals(37L * 23, rows[0].minutes)
         assertEquals("14h 11m", com.anivault.ui.export.ExportData.duration(rows[0].minutes))
     }
+
+    @Test fun backup_round_trips_sign_ins_only_when_present() {
+        val pw = "correct horse".toCharArray()
+        com.anivault.data.backup.BackupCodec.iterations = 1000
+        val withSecrets = com.anivault.data.backup.BackupPayload(secrets = mapOf("acct_token:anilist" to "t", "meta:name:anilist" to "me"))
+        val back = com.anivault.data.backup.BackupCodec.decrypt(com.anivault.data.backup.BackupCodec.encrypt(withSecrets, pw), pw)
+        assertEquals("t", back.secrets?.get("acct_token:anilist"))
+        val plain = com.anivault.data.backup.BackupCodec.decrypt(com.anivault.data.backup.BackupCodec.encrypt(com.anivault.data.backup.BackupPayload(), pw), pw)
+        assertEquals(null, plain.secrets)
+    }
 }

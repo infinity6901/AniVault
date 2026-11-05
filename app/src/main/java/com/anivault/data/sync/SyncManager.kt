@@ -24,6 +24,8 @@ data class SyncReport(
     val failedPushes: Int = 0,
     val conflicts: Int = 0,
     val skippedUnmatched: Int = 0,
+    /** Adult-rated titles from the account that went to H-Vault instead of the library. */
+    val toVault: Int = 0,
     val error: String? = null
 ) {
     val ok: Boolean get() = error == null
@@ -31,12 +33,14 @@ data class SyncReport(
         if (error != null) "${provider.label}: $error"
         else "${provider.label}: ${imported} added, ${pulled} updated here, ${pushed} sent" +
             (if (conflicts > 0) ", $conflicts conflict(s) resolved" else "") +
-            (if (failedPushes > 0) ", $failedPushes could not be sent" else "")
+            (if (failedPushes > 0) ", $failedPushes could not be sent" else "") +
+            (if (toVault > 0) ", $toVault adult title(s) kept in H-Vault" else "")
 }
 
 @Singleton
 class SyncManager @Inject constructor(
     private val dao: AnimeDao,
+    private val vaultDao: com.anivault.data.local.dao.HVaultDao,
     private val accounts: AccountManager,
     private val prefs: AppPrefs,
     private val diagnostics: DiagnosticsLog
@@ -70,7 +74,11 @@ class SyncManager @Inject constructor(
         return try {
             val report = accounts.withToken(p) { token, who ->
                 val api = accounts.api(p)
-                val remote = api.fetchList(token, who)
+                val allRemote = api.fetchList(token, who)
+                // Adult-rated titles never enter the normal library: they are kept in H-Vault (and any that an
+                // earlier sync already put in the library are moved there).
+                val (adultRemote, remote) = allRemote.partition { it.media.adult }
+                val toVault = routeAdultToVault(p, adultRemote)
                 val local = dao.getAll()
                 val last = accounts.lastSyncAt(p)
                 val policy = ConflictPolicy.parse(prefs.conflictPolicy)
@@ -96,7 +104,7 @@ class SyncManager @Inject constructor(
                         failed++
                     }
                 }
-                SyncReport(p, plan.imports.size, plan.pulls.size, pushed, failed, plan.conflicts, plan.skippedUnmatched)
+                SyncReport(p, plan.imports.size, plan.pulls.size, pushed, failed, plan.conflicts, plan.skippedUnmatched, toVault)
             }
             accounts.recordSync(p, t0)
             diagnostics.record(p.label, "sync", true, System.currentTimeMillis() - t0)
@@ -114,5 +122,32 @@ class SyncManager @Inject constructor(
             diagnostics.record(p.label, "sync", false, System.currentTimeMillis() - t0, e.message)
             SyncReport(p, error = msg)
         }
+    }
+
+    /** Saves adult entries to H-Vault (new ones only, so vault edits are never overwritten) and removes them from the library. */
+    private suspend fun routeAdultToVault(p: AccountProvider, adult: List<RemoteListEntry>): Int {
+        if (adult.isEmpty()) return 0
+        val library = dao.getAll()
+        val removeIds = HashSet<String>()
+        var added = 0
+        for (r in adult) {
+            val m = r.media
+            val vaultId = "sync:${p.key}:${r.remoteMediaId}"
+            if (vaultDao.getById(vaultId) == null) {
+                vaultDao.upsert(
+                    com.anivault.data.local.entity.HVaultEntry(
+                        id = vaultId, title = m.title, imageUrl = m.coverUrl,
+                        totalEpisodes = m.episodes, watchedEpisodes = r.progress, status = r.status,
+                        rating = r.score10, studio = null, isCensored = false, tags = m.genres, notes = "",
+                        durationMinutes = m.durationMinutes
+                    )
+                )
+                added++
+            }
+            val ids = m.remoteIds + (p.key to r.remoteMediaId)
+            library.filter { e -> RemoteIds.parse(e.remoteIds).any { (k, v) -> ids[k] == v } }.forEach { removeIds += it.id }
+        }
+        if (removeIds.isNotEmpty()) dao.deleteByIds(removeIds.toList())
+        return maxOf(added, removeIds.size)
     }
 }
