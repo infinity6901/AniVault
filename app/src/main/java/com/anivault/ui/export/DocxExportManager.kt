@@ -74,7 +74,8 @@ class DocxExportManager @Inject constructor(
                 val cover = if (m != null) drawing(m, drawingId++) else ""
                 body.append("<w:tr><w:trPr><w:cantSplit/></w:trPr>")
                 body.append(cell(WIDTHS[0], "<w:p><w:r>$cover</w:r></w:p>"))
-                body.append(cell(WIDTHS[1], paraRaw(esc(r.title), size = 21, bold = true) + (if (r.detail.isNotBlank()) paraRaw(esc(r.detail), size = 16, color = "64748B") else "")))
+                body.append(cell(WIDTHS[1], paraRaw(esc(r.title), size = 21, bold = true) + (if (r.detail.isNotBlank()) paraRaw(esc(r.detail), size = 16, color = "64748B") else "") +
+                    (if (r.synopsis.isNotBlank()) paraRaw(esc(r.synopsis.take(420) + if (r.synopsis.length > 420) "…" else ""), size = 17, italic = true, color = "475569", font = "Georgia", spaceAfter = 40) else "")))
                 body.append(cell(WIDTHS[2], paraRaw(r.progress, size = 20)))
                 body.append(cell(WIDTHS[3], paraRaw(esc(ExportData.statusLabel(r.status)), size = 18, bold = true, color = statusColor(r.status))))
                 body.append(cell(WIDTHS[4], paraRaw(if (r.rating > 0) "%.1f / 10".format(r.rating) else "Not rated", size = 20)))
@@ -103,16 +104,17 @@ class DocxExportManager @Inject constructor(
         "<w:tc><w:tcPr><w:tcW w:w=\"$width\" w:type=\"dxa\"/><w:vAlign w:val=\"center\"/></w:tcPr>$content</w:tc>"
 
     private fun drawing(m: Media, id: Int): String {
-        val cx = 457200L // 0.5 in
-        val cy = 650000L
+        val cx = 822960L // 0.9 in
+        val cy = 1170000L
         return """<w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="$cx" cy="$cy"/><wp:docPr id="$id" name="Cover $id"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="$id" name="${m.file}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${m.rId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="$cx" cy="$cy"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"""
     }
 
     private fun para(text: String, size: Int = 22, bold: Boolean = false, italic: Boolean = false, color: String? = null, spaceAfter: Int = 60) =
         paraRaw(esc(text), size, bold, italic, color, spaceAfter)
 
-    private fun paraRaw(escaped: String, size: Int = 22, bold: Boolean = false, italic: Boolean = false, color: String? = null, spaceAfter: Int = 20) =
+    private fun paraRaw(escaped: String, size: Int = 22, bold: Boolean = false, italic: Boolean = false, color: String? = null, spaceAfter: Int = 20, font: String? = null) =
         "<w:p><w:pPr><w:spacing w:before=\"20\" w:after=\"$spaceAfter\"/></w:pPr><w:r><w:rPr>" +
+            (if (font != null) "<w:rFonts w:ascii=\"$font\" w:hAnsi=\"$font\"/>" else "") +
             (if (bold) "<w:b/>" else "") + (if (italic) "<w:i/>" else "") +
             (if (color != null) "<w:color w:val=\"$color\"/>" else "") +
             "<w:sz w:val=\"$size\"/></w:rPr><w:t xml:space=\"preserve\">$escaped</w:t></w:r></w:p>"
@@ -135,7 +137,7 @@ ${media.joinToString("\n") { "<Relationship Id=\"${it.rId}\" Type=\"http://schem
 
     private companion object {
         // Cover, Title, Episodes, Status, Rating, Time (twentieths of a point; usable width ≈ 10100)
-        val WIDTHS = intArrayOf(900, 4300, 1050, 1500, 1200, 1150)
+        val WIDTHS = intArrayOf(1450, 4300, 1000, 1300, 1100, 950)
 
         const val CONTENT_TYPES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">

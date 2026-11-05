@@ -30,7 +30,9 @@ data class ExportRow(
     val rating: Float,
     val minutes: Long,
     /** True when [minutes] used a typical episode length because the database had none. */
-    val estimated: Boolean
+    val estimated: Boolean,
+    /** Short description printed in italics under the title. */
+    val synopsis: String = ""
 ) {
     val progress: String get() = if (total > 0) "$watched/$total" else "$watched/?"
 }
@@ -45,15 +47,17 @@ object ExportData {
     fun anime(entries: List<AnimeEntry>): List<ExportRow> = entries.map { e ->
         val w = watched(e.status, e.watchedEpisodes, e.totalEpisodes)
         val per = StatsCalculator.effectiveMinutes(e)
-        ExportRow(e.title, e.genres.take(4).joinToString(" · "), e.imageUrl, e.status, w, e.totalEpisodes, e.rating, w.toLong() * per, e.durationMinutes <= 0)
+        ExportRow(e.title, e.genres.take(4).joinToString(" · "), e.imageUrl, e.status, w, e.totalEpisodes, e.rating, w.toLong() * per, e.durationMinutes <= 0, clean(e.synopsis))
     }
 
     fun vault(entries: List<HVaultEntry>): List<ExportRow> = entries.map { e ->
         val w = watched(e.status, e.watchedEpisodes, e.totalEpisodes)
         val per = if (e.durationMinutes > 0) e.durationMinutes else StatsCalculator.typicalMinutes("")
         val detail = listOfNotNull(e.studio?.takeIf { it.isNotBlank() }, e.tags.take(4).joinToString(" · ").takeIf { it.isNotBlank() }).joinToString(" — ")
-        ExportRow(e.title, detail, e.imageUrl, e.status, w, e.totalEpisodes, e.rating, w.toLong() * per, e.durationMinutes <= 0)
+        ExportRow(e.title, detail, e.imageUrl, e.status, w, e.totalEpisodes, e.rating, w.toLong() * per, e.durationMinutes <= 0, clean(e.notes))
     }
+
+    private fun clean(t: String) = t.replace(Regex("\\s+"), " ").trim()
 
     fun stats(rows: List<ExportRow>): ExportStats {
         val rated = rows.filter { it.rating > 0 }
@@ -111,5 +115,5 @@ class CoverLoader @Inject constructor() {
         }
     } catch (_: Exception) { null }
 
-    private companion object { const val TARGET_W = 160 }
+    private companion object { const val TARGET_W = 300 }
 }

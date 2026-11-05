@@ -50,7 +50,9 @@ data class ApiSource(
     val verified: Boolean = false,
     val lastCheckedAt: Long = 0L,
     val lastStatus: String = "",
-    val lastError: String = ""
+    val lastError: String = "",
+    /** H-Vault sources ask the catalog for adult-rated titles instead of hiding them. */
+    val adult: Boolean = false
 )
 
 /** The one model every adapter produces (spec §7 "Normalized anime model"). */

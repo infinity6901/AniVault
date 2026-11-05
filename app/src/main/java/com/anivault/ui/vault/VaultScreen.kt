@@ -140,8 +140,13 @@ private fun VaultContent(onBack: () -> Unit, vm: VaultViewModel) {
             TabRow(tab) {
                 Tab(tab == 0, { tab = 0 }, text = { Text("My vault (${entries.size})") })
                 Tab(tab == 1, { tab = 1 }, text = { Text("Search") })
+                Tab(tab == 2, { tab = 2 }, text = { Text("Sources") })
             }
-            if (tab == 0) {
+            if (tab == 2) {
+                Box(Modifier.fillMaxSize()) {
+                    com.anivault.ui.settings.ApiSourcesScreen(onBack = { tab = 1 }, embedded = true, vm = hiltViewModel<com.anivault.ui.settings.VaultApiSourcesViewModel>())
+                }
+            } else if (tab == 0) {
                 if (entries.isEmpty()) EmptyState("Nothing here yet", "Use Search to add entries.", Icons.Default.Lock)
                 else LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(entries, key = { it.id }) { e ->

@@ -10,7 +10,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import javax.inject.Named
 import javax.inject.Singleton
+import com.anivault.data.provider.ProviderRepository
+import com.anivault.data.provider.ProviderResult
 
 /**
  * Orchestrates H-Vault data retrieval across three [HentaiSource] backends:
@@ -26,7 +29,7 @@ class HentaiFallbackRepository @Inject constructor(
     private val primary:    HentaiScraperRepository,
     private val fallback:   WatchHentaiScraperRepository,
     private val nhentai:    NhentaiApiRepository,
-    private val adult:      AdultCatalogRepository,
+    @Named("vault") private val vaultProviders: ProviderRepository,
     private val hVaultDao:  HVaultDao
 ) {
     // ── Vault observation (source-agnostic) ────────────────────────────────
@@ -41,22 +44,33 @@ class HentaiFallbackRepository @Inject constructor(
     suspend fun search(query: String, page: Int = 1): SearchResult =
         withContext(Dispatchers.IO) {
             val failures = mutableListOf<String>()
-            // Catalog APIs first (reliable, uncensored covers), scrapers after (often blocked by bot checks).
-            val chain: List<HentaiSource> = adult.sources + listOf(primary, fallback, nhentai)
-            chain.forEachIndexed { index, src ->
+            var answered = false
+            // 1. The H-Vault API sources (Settings inside H-Vault): reliable APIs with uncensored covers.
+            when (val r = vaultProviders.search(query, page)) {
+                is ProviderResult.Success -> {
+                    answered = true
+                    if (r.items.isNotEmpty()) return@withContext SearchResult(r.items.map { it.toScraped("v-${r.source.id}") }, r.source.name, false)
+                }
+                is ProviderResult.Failed -> r.failures.forEach { failures += "${it.sourceName}: ${it.kind.label}" }
+                ProviderResult.NoSources -> failures += "No H-Vault API source is enabled"
+            }
+            // 2. Scrapers, which sites often block with bot checks.
+            val scrapers: List<HentaiSource> = listOf(primary, fallback, nhentai)
+            for (src in scrapers) {
                 try {
                     val results = src.search(query, page)
-                    if (results.isNotEmpty()) return@withContext SearchResult(results, src.sourceName, index > 0)
+                    answered = true
+                    if (results.isNotEmpty()) return@withContext SearchResult(results, src.sourceName, true)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
                     failures += "${src.sourceName}: ${Sanitizer.clean(error.message, 100).ifBlank { "request failed" }}"
                 }
             }
-            if (failures.size == chain.size) {
+            if (!answered) {
                 throw IllegalStateException("H-Vault search could not reach any source. ${failures.joinToString(" • ")}")
             }
-            SearchResult(emptyList(), chain.last().sourceName, false)
+            SearchResult(emptyList(), scrapers.last().sourceName, false)
         }
 
     // ── Detail fetch (tries all sources) ──────────────────────────────────
@@ -132,3 +146,15 @@ class HentaiFallbackRepository @Inject constructor(
         val usedFallback: Boolean
     )
 }
+
+internal fun com.anivault.data.provider.NormalizedAnime.toScraped(prefix: String) = ScrapedEntry(
+    id = "$prefix:$providerId",
+    title = title,
+    coverUrl = coverUrl,
+    tags = genres,
+    studio = null,
+    isCensored = false,
+    episodeCount = episodes,
+    durationMinutes = durationMinutes,
+    detailUrl = "catalog:$prefix:$providerId"
+)
