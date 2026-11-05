@@ -40,16 +40,27 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
-      # One debug signing key for the whole run, so the debug and release APKs share a signature.
-      - name: Create the shared Android debug signing key
+      # A fixed signing key keeps updates installable over the previous build. It comes from the repository
+      # secret ANIVAULT_KEYSTORE_B64 (base64 of the keystore; alias androiddebugkey, password "android").
+      # Without the secret (forks, first run) a throw-away key is made and the summary says so.
+      - name: Install the signing key (secret, or a throw-away one)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANIVAULT_KEYSTORE_B64 }}
         run: |
           export ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home/.android"
-          mkdir -p "$ANDROID_USER_HOME"
-          keytool -genkeypair -keystore "$ANDROID_USER_HOME/debug.keystore" \
-            -storepass android -keypass android -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
-          mkdir -p keystore && cp "$ANDROID_USER_HOME/debug.keystore" keystore/
+          mkdir -p "$ANDROID_USER_HOME" keystore
+          if [[ -n "$KEYSTORE_B64" ]]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$ANDROID_USER_HOME/debug.keystore"
+            printf '## Signing key\nUsing the fixed key from the ANIVAULT_KEYSTORE_B64 secret: updates install over earlier builds.\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            keytool -genkeypair -keystore "$ANDROID_USER_HOME/debug.keystore" \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            echo "::warning::No ANIVAULT_KEYSTORE_B64 secret: signed with a throw-away key, so this APK will not update over a previous install."
+            printf '## Signing key\n**Throw-away key** (secret ANIVAULT_KEYSTORE_B64 not set): this build will not install as an update over earlier ones.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          cp "$ANDROID_USER_HOME/debug.keystore" keystore/
       - uses: actions/upload-artifact@v4
         with: { name: ci-keystore, path: keystore/debug.keystore, retention-days: 1 }
       - name: Decide whether this run publishes a release
