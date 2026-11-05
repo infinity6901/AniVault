@@ -26,6 +26,16 @@ android {
         }
     }
 
+    // One APK per CPU architecture (smaller downloads), plus a universal APK that runs anywhere.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+            isUniversalApk = true
+        }
+    }
+
     buildTypes {
         release {
             // FOSS/direct-distribution builds are signed with Android's generated debug key.
