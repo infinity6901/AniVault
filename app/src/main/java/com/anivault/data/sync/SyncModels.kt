@@ -56,5 +56,7 @@ data class RemoteListEntry(
     val completedAt: Long?,
     /** Epoch millis of the remote's own last-modified time (0 if unknown). */
     val updatedAt: Long,
-    val media: NormalizedAnime
+    val media: NormalizedAnime,
+    /** The account's own notes for the entry ("" when the service does not expose them). */
+    val notes: String = ""
 )

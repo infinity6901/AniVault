@@ -56,7 +56,8 @@ object ProgressRules {
 @Singleton
 class LibraryRepository @Inject constructor(
     private val dao: AnimeDao,
-    private val prefs: AppPrefs
+    private val prefs: AppPrefs,
+    private val remoteOps: com.anivault.data.sync.RemoteOps
 ) {
     fun observeAll(): Flow<List<AnimeEntry>> = dao.observeAll()
     fun observe(id: String): Flow<AnimeEntry?> = dao.observeById(id)
@@ -101,8 +102,14 @@ class LibraryRepository @Inject constructor(
     suspend fun delete(ids: List<String>): List<AnimeEntry> {
         val removed = ids.mapNotNull { dao.getById(it) }
         if (removed.isNotEmpty()) dao.deleteByIds(removed.map { it.id })
+        // Deleting here removes the title from the connected accounts too (at the next sync, or right away when online).
+        if (prefs.deleteOnAccounts) removed.forEach { remoteOps.enqueueAll(it.remoteIds, com.anivault.data.sync.OpType.DELETE) }
         return removed
     }
 
-    suspend fun restore(entries: List<AnimeEntry>) { if (entries.isNotEmpty()) dao.upsertAll(entries) }
+    suspend fun restore(entries: List<AnimeEntry>) {
+        if (entries.isEmpty()) return
+        dao.upsertAll(entries)
+        entries.forEach { remoteOps.cancelAll(it.remoteIds, com.anivault.data.sync.OpType.DELETE) }
+    }
 }

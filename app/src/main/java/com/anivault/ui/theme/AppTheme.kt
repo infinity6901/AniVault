@@ -154,9 +154,11 @@ fun AniVaultTheme(
     if (mode == AppMode.H_VAULT && pal != Palette.DYNAMIC && pal != Palette.GLASS) scheme = scheme.copy(primary = AniVaultColors.HVaultPrimary)
     androidx.compose.runtime.CompositionLocalProvider(LocalPalette provides pal) {
         MaterialTheme(colorScheme = scheme) {
-            if (pal == Palette.GLASS) {
-                androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize().background(GlassBackdrop)) { content() }
-            } else content()
+            // Always the same wrapper: switching it on and off would rebuild the whole app (and its navigation state)
+            // whenever the style changes, which dropped you back on the Home tab.
+            androidx.compose.foundation.layout.Box(
+                if (pal == Palette.GLASS) androidx.compose.ui.Modifier.fillMaxSize().background(GlassBackdrop) else androidx.compose.ui.Modifier.fillMaxSize()
+            ) { content() }
         }
     }
 }

@@ -54,8 +54,20 @@ data class VaultSearchState(
 class VaultViewModel @Inject constructor(
     private val repo: HentaiFallbackRepository,
     private val mover: com.anivault.data.library.VaultMover,
+    private val sync: com.anivault.data.sync.SyncManager,
     val session: VaultSession
 ) : ViewModel() {
+    val syncing = sync.running
+    private val _message = MutableStateFlow<String?>(null)
+    val message: StateFlow<String?> = _message.asStateFlow()
+    fun clearMessage() { _message.value = null }
+    /** Two-way sync of linked H-Vault entries with the connected accounts (the screen is already behind the unlock). */
+    fun syncWithAccounts() {
+        viewModelScope.launch {
+            val reports = sync.syncVault()
+            _message.value = if (reports.isEmpty()) "No connected accounts. Connect one in Settings → Account & Sync." else reports.joinToString("\n") { it.summary() }
+        }
+    }
     val entries: StateFlow<List<HVaultEntry>> = repo.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     private val _search = MutableStateFlow(VaultSearchState())
     val search: StateFlow<VaultSearchState> = _search.asStateFlow()
@@ -136,10 +148,19 @@ private fun VaultContent(onBack: () -> Unit, vm: VaultViewModel) {
     val search by vm.search.collectAsStateWithLifecycle()
     var tab by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
-    Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
+    val syncing by vm.syncing.collectAsStateWithLifecycle()
+    val message by vm.message.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.clearMessage() } }
+    Scaffold(containerColor = MaterialTheme.colorScheme.background, snackbarHost = { SnackbarHost(snackbar) }, topBar = {
         TopAppBar(title = { Text("H-Vault") },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-            actions = { IconButton(onClick = { vm.lock(); onBack() }) { Icon(Icons.Default.Lock, "Lock H-Vault") } })
+            actions = {
+                IconButton(onClick = vm::syncWithAccounts, enabled = !syncing) {
+                    if (syncing) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Sync, "Sync H-Vault with accounts")
+                }
+                IconButton(onClick = { vm.lock(); onBack() }) { Icon(Icons.Default.Lock, "Lock H-Vault") }
+            })
     }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             TabRow(tab) {

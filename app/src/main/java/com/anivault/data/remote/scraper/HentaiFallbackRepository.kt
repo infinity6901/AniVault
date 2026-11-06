@@ -30,7 +30,9 @@ class HentaiFallbackRepository @Inject constructor(
     private val fallback:   WatchHentaiScraperRepository,
     private val nhentai:    NhentaiApiRepository,
     @Named("vault") private val vaultProviders: ProviderRepository,
-    private val hVaultDao:  HVaultDao
+    private val hVaultDao:  HVaultDao,
+    private val remoteOps:  com.anivault.data.sync.RemoteOps,
+    private val prefs:      com.anivault.core.AppPrefs
 ) {
     // ── Vault observation (source-agnostic) ────────────────────────────────
 
@@ -124,6 +126,10 @@ class HentaiFallbackRepository @Inject constructor(
 
     suspend fun deleteById(id: String) = withContext(Dispatchers.IO) {
         hVaultDao.deleteById(id)
+        // Same rule as the library: deleting also removes the title from the linked accounts.
+        val ids = com.anivault.data.sync.VaultOwnership.keysOfVaultId(id) + com.anivault.data.sync.VaultOwnership.keysOf(remoteOps.link(id))
+        if (prefs.deleteOnAccounts) ids.forEach { k -> val (s, m) = k.split(":", limit = 2); remoteOps.enqueue(com.anivault.data.sync.RemoteOp(com.anivault.data.sync.OpType.DELETE, s, m)) }
+        remoteOps.setLink(id, "")
     }
 
     suspend fun getAll(): List<HVaultEntry> = withContext(Dispatchers.IO) {

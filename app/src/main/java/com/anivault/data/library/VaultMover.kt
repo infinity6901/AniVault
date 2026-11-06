@@ -35,11 +35,12 @@ object VaultMapping {
         else -> "vault:${v.id}"
     }
 
-    fun toLibrary(v: HVaultEntry, now: Long): AnimeEntry {
-        val remote = if (v.id.startsWith("sync:")) {
+    fun toLibrary(v: HVaultEntry, now: Long, linked: String = ""): AnimeEntry {
+        val fromId = if (v.id.startsWith("sync:")) {
             val parts = v.id.removePrefix("sync:").split(":", limit = 2)
             if (parts.size == 2) mapOf(parts[0] to parts[1]) else emptyMap()
         } else emptyMap()
+        val remote = RemoteIds.parse(linked) + fromId
         return AnimeEntry(
             id = libraryId(v), title = v.title, imageUrl = v.imageUrl, totalEpisodes = v.totalEpisodes,
             watchedEpisodes = v.watchedEpisodes, status = v.status, rating = v.rating, genres = v.tags, notes = v.notes,
@@ -76,7 +77,12 @@ object VaultRules {
 }
 
 @Singleton
-class VaultMover @Inject constructor(private val animeDao: AnimeDao, private val vaultDao: HVaultDao) {
+class VaultMover @Inject constructor(
+    private val animeDao: AnimeDao,
+    private val vaultDao: HVaultDao,
+    private val remoteOps: com.anivault.data.sync.RemoteOps,
+    private val prefs: com.anivault.core.AppPrefs
+) {
     /** Moves library rows into H-Vault. Returns how many moved. */
     suspend fun toVault(ids: List<String>): Int {
         val now = System.currentTimeMillis()
@@ -84,6 +90,11 @@ class VaultMover @Inject constructor(private val animeDao: AnimeDao, private val
         if (rows.isEmpty()) return 0
         vaultDao.upsertAll(rows.map { VaultMapping.toVault(it, now) })
         animeDao.deleteByIds(rows.map { it.id })
+        // Remember every account link so no service's sync puts the title back, and tag it on the accounts.
+        rows.forEach { e ->
+            remoteOps.setLink(VaultMapping.vaultId(e), e.remoteIds)
+            if (prefs.markVaultOnAccounts) remoteOps.enqueueAll(e.remoteIds, com.anivault.data.sync.OpType.MARK)
+        }
         return rows.size
     }
 
@@ -93,9 +104,14 @@ class VaultMover @Inject constructor(private val animeDao: AnimeDao, private val
         val rows = ids.mapNotNull { vaultDao.getById(it) }
         if (rows.isEmpty()) return 0
         // Keep an existing library row for the same title instead of overwriting it.
-        val fresh = rows.map { VaultMapping.toLibrary(it, now) }.filter { animeDao.getById(it.id) == null }
+        val fresh = rows.map { VaultMapping.toLibrary(it, now, remoteOps.link(it.id)) }.filter { animeDao.getById(it.id) == null }
         animeDao.upsertAll(fresh)
         vaultDao.deleteByIds(rows.map { it.id })
+        rows.forEach { v ->
+            val ids = RemoteIds.encode(RemoteIds.parse(remoteOps.link(v.id)) + VaultMapping.toLibrary(v, now).let { RemoteIds.parse(it.remoteIds) })
+            remoteOps.setLink(v.id, "")
+            if (prefs.markVaultOnAccounts) remoteOps.enqueueAll(ids, com.anivault.data.sync.OpType.UNMARK)
+        }
         return rows.size
     }
 }

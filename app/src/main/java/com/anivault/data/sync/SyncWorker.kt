@@ -28,6 +28,14 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
                 .build()
             WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(NAME, ExistingPeriodicWorkPolicy.KEEP, req)
         }
+        /** Retries after a rate limit. */
+        fun runLater(ctx: Context, minutes: Long) {
+            val req = OneTimeWorkRequestBuilder<SyncWorker>()
+                .setInitialDelay(minutes, TimeUnit.MINUTES)
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .build()
+            WorkManager.getInstance(ctx).enqueueUniqueWork("$NAME-later", ExistingWorkPolicy.REPLACE, req)
+        }
         fun runSoon(ctx: Context) {
             val req = OneTimeWorkRequestBuilder<SyncWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
