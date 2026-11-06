@@ -114,6 +114,12 @@ fun AccountScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
             if (syncing) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)) }
             Text(if (syncing) "Syncing…" else "Sync now")
         }
+        var delRemote by remember { mutableStateOf(vm.prefs.deleteOnAccounts) }
+        var markVault by remember { mutableStateOf(vm.prefs.markVaultOnAccounts) }
+        GroupLabel("Deleting and H-Vault")
+        SwitchRow("Delete on accounts too", "Deleting a title here also removes it from your AniList, MyAnimeList and Kitsu lists.", delRemote) { delRemote = it; vm.prefs.deleteOnAccounts = it }
+        SwitchRow("Tag H-Vault titles on accounts", "Titles you move to H-Vault get a small tag in their notes (and become private on AniList and Kitsu), so any device that syncs keeps them in H-Vault. MyAnimeList can't hold the tag.", markVault) { markVault = it; vm.prefs.markVaultOnAccounts = it }
+        Note("H-Vault progress syncs from the H-Vault screen (Sync button), which needs your unlock.")
         GroupLabel("If both sides changed")
         ChoiceGroup(ConflictPolicy.values().map { it to it.label }, policy, { policy = it; vm.setConflictPolicy(it) }, { it.explanation })
     }

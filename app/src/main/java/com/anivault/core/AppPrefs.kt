@@ -92,6 +92,16 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
 
     // ── Sync ───────────────────────────────────────────────────────────────
     /** "NEWEST" | "REMOTE" | "LOCAL" */
+    /** Deleting a title here also deletes it on the connected accounts. */
+    var deleteOnAccounts: Boolean
+        get() = sp.getBoolean(K_DELETE_REMOTE, true)
+        set(v) = putBool(K_DELETE_REMOTE, v)
+
+    /** Titles moved to H-Vault get a tag in their account notes (and are made private where supported). */
+    var markVaultOnAccounts: Boolean
+        get() = sp.getBoolean(K_MARK_VAULT, true)
+        set(v) = putBool(K_MARK_VAULT, v)
+
     var conflictPolicy: String
         get() = sp.getString(K_CONFLICT, "NEWEST") ?: "NEWEST"
         set(v) = putString(K_CONFLICT, v)
@@ -135,6 +145,8 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         const val K_NET_RETRIES = "net_retries"
         const val K_FALLBACK_EMPTY = "fallback_on_empty"
         const val K_CONFLICT = "conflict_policy"
+        const val K_DELETE_REMOTE = "delete_on_accounts"
+        const val K_MARK_VAULT = "mark_vault_on_accounts"
         const val K_NOTIF = "notif_enabled"
         const val K_NOTIF_REMINDERS = "notif_reminders"
         const val K_NOTIF_SYNC = "notif_sync"
@@ -145,7 +157,7 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         val BACKUP_KEYS = setOf(
             K_THEME, K_DYNAMIC, K_PALETTE, K_CONFIRM_DELETE, K_DEFAULT_STATUS, K_AUTO_COMPLETE, K_PLUS_ONE,
             K_SYNOPSIS, K_LIB_VIEW, K_LIB_SORT, K_NET_TIMEOUT, K_NET_RETRIES, K_FALLBACK_EMPTY,
-            K_CONFLICT, K_QUIET_START, K_QUIET_END
+            K_CONFLICT, K_DELETE_REMOTE, K_MARK_VAULT, K_QUIET_START, K_QUIET_END
         )
     }
 }

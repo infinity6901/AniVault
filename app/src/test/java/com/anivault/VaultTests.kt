@@ -51,3 +51,23 @@ class VaultTests {
         assertEquals("custom:1", VaultMapping.toLibrary(vault, 2L).id)
     }
 }
+
+class VaultOwnershipTests {
+    @Test fun keysCoverEveryLinkedService() {
+        val k = com.anivault.data.sync.VaultOwnership.keysOf(RemoteIds.encode(mapOf("anilist" to "1", "mal" to "2", "kitsu" to "3", "kitsuEntry" to "9")))
+        assertEquals(setOf("anilist:1", "mal:2", "kitsu:3"), k)
+    }
+
+    @Test fun markIsAddedAndRemovedWithoutTouchingUserNotes() {
+        val o = com.anivault.data.sync.VaultOwnership
+        val marked = o.withMark("great show", true)
+        assertTrue(o.hasMark(marked)); assertTrue(marked.startsWith("great show"))
+        assertEquals("great show", o.withMark(marked, false))
+        assertEquals(o.withMark("", true), com.anivault.data.sync.VAULT_MARK)
+    }
+
+    @Test fun vaultIdKeys() {
+        assertEquals(setOf("mal:55"), com.anivault.data.sync.VaultOwnership.keysOfVaultId("sync:mal:55"))
+        assertTrue(com.anivault.data.sync.VaultOwnership.keysOfVaultId("moved:x").isEmpty())
+    }
+}
