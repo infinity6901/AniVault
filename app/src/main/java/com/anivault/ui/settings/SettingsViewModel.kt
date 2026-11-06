@@ -81,9 +81,9 @@ class SettingsViewModel @Inject constructor(
     private val _canUndo = MutableStateFlow(backup.canUndoRestore)
     val canUndo: StateFlow<Boolean> = _canUndo.asStateFlow()
 
-    fun exportBackup(uri: Uri, password: String, includeVault: Boolean, includeSettings: Boolean, includeSecrets: Boolean = false) = launchBusy {
+    fun exportBackup(uri: Uri, password: String, includeVault: Boolean, includeSettings: Boolean, includeSecrets: Boolean = false, includeLibrary: Boolean = true) = launchBusy {
         val chars = password.toCharArray()
-        try { backup.export(uri, chars, includeVault, includeSettings, includeSecrets); say("Encrypted backup saved.") }
+        try { backup.export(uri, chars, includeVault, includeSettings, includeSecrets, includeLibrary); say("Encrypted backup saved.") }
         catch (e: BackupException) { say(e.message ?: "Backup failed.") }
         catch (e: Exception) { say("Backup failed. Nothing was written.") }
         finally { chars.fill('\u0000') }
@@ -99,10 +99,10 @@ class SettingsViewModel @Inject constructor(
 
     fun cancelRestore() { pendingPayload = null; _preview.value = null }
 
-    fun restore(mode: RestoreMode, includeVault: Boolean, includeSettings: Boolean, includeSecrets: Boolean = false) = launchBusy {
+    fun restore(mode: RestoreMode, includeVault: Boolean, includeSettings: Boolean, includeSecrets: Boolean = false, includeLibrary: Boolean = true) = launchBusy {
         val p = pendingPayload ?: return@launchBusy
         try {
-            backup.restore(p, mode, includeVault, includeSettings, includeSecrets)
+            backup.restore(p, mode, includeVault, includeSettings, includeSecrets, includeLibrary)
             _canUndo.value = backup.canUndoRestore
             say(if (mode == RestoreMode.REPLACE) "Library replaced from backup." else "Backup merged into your library.")
         } catch (e: Exception) { say("Restore failed. Your library was left unchanged.") }

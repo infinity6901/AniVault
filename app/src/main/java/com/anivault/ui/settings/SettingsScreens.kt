@@ -8,6 +8,12 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.border
+import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -168,13 +174,36 @@ fun PlayerSettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewMod
 @Composable
 fun AppearanceScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
     var theme by remember { mutableStateOf(vm.prefs.theme) }
-    var dyn by remember { mutableStateOf(vm.prefs.dynamicColor) }
+    var palette by remember { mutableStateOf(com.anivault.ui.theme.Palette.parse(vm.prefs.palette)) }
     val canDynamic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     CategoryScaffold("Appearance", onBack, vm) {
         GroupLabel("Theme")
         ChoiceGroup(listOf("dark" to "Dark", "light" to "Light", "system" to "Follow system"), theme, { theme = it; vm.prefs.theme = it })
-        GroupLabel("Colors")
-        SwitchRow("Material You colors", if (canDynamic) "Use your wallpaper's colors instead of the AniVault purple." else "Requires Android 12 or newer.", dyn && canDynamic, canDynamic) { dyn = it; vm.prefs.dynamicColor = it }
+        Note("Frosted glass and AMOLED black are always dark.")
+        GroupLabel("Style")
+        com.anivault.ui.theme.Palette.values().forEach { p ->
+            val enabled = p != com.anivault.ui.theme.Palette.DYNAMIC || canDynamic
+            val selected = p == palette
+            androidx.compose.material3.Surface(
+                onClick = { if (enabled) { palette = p; vm.prefs.palette = p.key } },
+                enabled = enabled, shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            ) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
+                        p.swatch.forEach { c -> Box(Modifier.size(26.dp).clip(androidx.compose.foundation.shape.CircleShape).background(c).border(1.dp, Color(0x55FFFFFF), androidx.compose.foundation.shape.CircleShape)) }
+                    }
+                    Spacer(Modifier.width(18.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(p.label, fontWeight = FontWeight.SemiBold)
+                        Text(if (!enabled) "Requires Android 12 or newer." else p.blurb, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (selected) Icon(Icons.Default.Check, "Selected", tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+        }
     }
 }
 
@@ -185,6 +214,7 @@ fun BackupScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
     val busy by vm.busy.collectAsStateWithLifecycle()
     val preview by vm.preview.collectAsStateWithLifecycle()
     val canUndo by vm.canUndo.collectAsStateWithLifecycle()
+    var includeLibrary by remember { mutableStateOf(true) }
     var includeVault by remember { mutableStateOf(false) }
     var includeSettings by remember { mutableStateOf(true) }
     var includeSecrets by remember { mutableStateOf(false) }
@@ -196,6 +226,7 @@ fun BackupScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
     CategoryScaffold("Backup & Restore", onBack, vm) {
         GroupLabel("Encrypted backup")
         Note("Backups are encrypted with a password you choose (AES-256-GCM). If you forget it, the backup cannot be opened – there is no recovery.")
+        SwitchRow("Include library", "Your normal anime library. Turn off to back up only H-Vault, settings or sign-ins.", includeLibrary) { includeLibrary = it }
         SwitchRow("Include settings", "Theme and library preferences.", includeSettings) { includeSettings = it }
         SwitchRow("Include H-Vault", "Off by default. Only turn on if you want private entries inside this file.", includeVault) { includeVault = it }
         SwitchRow("Include sign-ins and client IDs", "Off by default. Adds your AniList, MyAnimeList and Kitsu sign-in tokens and your client IDs, so a restore on a new device stays signed in. Anyone with the file and its password can use them.", includeSecrets) { includeSecrets = it }
@@ -233,32 +264,35 @@ fun BackupScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
         }, confirmButton = {
             TextButton(enabled = pw.isNotEmpty(), onClick = {
                 val u = pendingUri; pwDialog = null
-                if (u != null) { if (kind == "export") vm.exportBackup(u, pw, includeVault, includeSettings, includeSecrets) else vm.openBackup(u, pw) }
+                if (u != null) { if (kind == "export") vm.exportBackup(u, pw, includeVault, includeSettings, includeSecrets, includeLibrary) else vm.openBackup(u, pw) }
             }) { Text(if (kind == "export") "Create" else "Open") }
         }, dismissButton = { TextButton(onClick = { pwDialog = null }) { Text("Cancel") } })
     }
 
     preview?.let { pv ->
         var mode by remember { mutableStateOf(RestoreMode.MERGE) }
+        var withLibrary by remember { mutableStateOf(pv.hasLibrary) }
         var withVault by remember { mutableStateOf(false) }
         var withSettings by remember { mutableStateOf(pv.hasSettings) }
         var withSecrets by remember { mutableStateOf(false) }
         AlertDialog(onDismissRequest = vm::cancelRestore, title = { Text("Restore preview") }, text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text("Backup from ${DateFormat.getDateTimeInstance().format(Date(pv.createdAt))}", fontSize = 13.sp)
-                Text("${pv.animeInBackup} titles: ${pv.animeNew} new, ${pv.animeConflicts} differ from yours, ${pv.animeIdentical} identical.")
-                if (pv.animeOnlyHere > 0) Text("${pv.animeOnlyHere} titles exist only on this device.", fontSize = 13.sp)
+                if (pv.hasLibrary) Text("${pv.animeInBackup} titles: ${pv.animeNew} new, ${pv.animeConflicts} differ from yours, ${pv.animeIdentical} identical.")
+                else Text("This backup does not contain the normal library.", fontSize = 13.sp)
+                if (pv.hasLibrary && pv.animeOnlyHere > 0) Text("${pv.animeOnlyHere} titles exist only on this device.", fontSize = 13.sp)
                 pv.hvaultInBackup?.let { Text("H-Vault: $it entries (${pv.hvaultNew} new, ${pv.hvaultConflicts} differ).") }
                 ChoiceGroup(
                     listOf(RestoreMode.MERGE to "Merge", RestoreMode.REPLACE to "Replace"), mode, { mode = it },
                     { if (it == RestoreMode.MERGE) "Keep everything here; add new titles and take the backup's copy only where it is newer." else "Make the library exactly match the backup. ${pv.animeOnlyHere} local titles would be removed." }
                 )
+                if (pv.hasLibrary) SwitchRow("Restore library", null, withLibrary) { withLibrary = it }
                 if (pv.hvaultInBackup != null) SwitchRow("Restore H-Vault entries", null, withVault) { withVault = it }
                 if (pv.hasSettings) SwitchRow("Restore settings", null, withSettings) { withSettings = it }
                 if (pv.hasSecrets) SwitchRow("Restore sign-ins and client IDs", "Replaces the accounts and client IDs on this device with the ones in the backup.", withSecrets) { withSecrets = it }
                 Note("Everything is applied in one step; if it fails nothing changes, and you can undo afterwards.")
             }
-        }, confirmButton = { TextButton(onClick = { vm.restore(mode, withVault, withSettings, withSecrets) }) { Text(if (mode == RestoreMode.REPLACE) "Replace" else "Merge") } },
+        }, confirmButton = { TextButton(onClick = { vm.restore(mode, withVault, withSettings, withSecrets, withLibrary) }) { Text(if (mode == RestoreMode.REPLACE) "Replace" else "Merge") } },
             dismissButton = { TextButton(onClick = vm::cancelRestore) { Text("Cancel") } })
     }
 }

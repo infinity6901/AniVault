@@ -77,7 +77,9 @@ class SyncManager @Inject constructor(
                 val allRemote = api.fetchList(token, who)
                 // Adult-rated titles never enter the normal library: they are kept in H-Vault (and any that an
                 // earlier sync already put in the library are moved there).
-                val (adultRemote, remote) = allRemote.partition { it.media.adult }
+                val (adultRemote, nonAdult) = allRemote.partition { it.media.adult }
+                // Titles the user moved into H-Vault by hand stay there instead of being re-imported.
+                val remote = nonAdult.filter { vaultDao.getById("sync:${p.key}:${it.remoteMediaId}") == null }
                 val toVault = routeAdultToVault(p, adultRemote)
                 val local = dao.getAll()
                 val last = accounts.lastSyncAt(p)

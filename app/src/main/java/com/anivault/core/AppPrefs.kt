@@ -38,10 +38,10 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
     var theme: String
         get() = sp.getString(K_THEME, "dark") ?: "dark"
         set(v) = putString(K_THEME, v)
-    /** Material You colors on Android 12+; off keeps the AniVault palette. */
-    var dynamicColor: Boolean
-        get() = sp.getBoolean(K_DYNAMIC, false)
-        set(v) = putBool(K_DYNAMIC, v)
+    /** Colour palette key, see [com.anivault.ui.theme.Palette]. Falls back to the old Material You switch. */
+    var palette: String
+        get() = sp.getString(K_PALETTE, null) ?: if (sp.getBoolean(K_DYNAMIC, false)) "dynamic" else "anivault"
+        set(v) = putString(K_PALETTE, v)
 
     // ── Library & tracking ─────────────────────────────────────────────────
     var confirmDelete: Boolean
@@ -121,6 +121,7 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
 
         const val K_THEME = "theme"
         const val K_DYNAMIC = "dynamic_color"
+        const val K_PALETTE = "palette"
         const val K_CONFIRM_DELETE = "confirm_delete"
         const val K_DEFAULT_STATUS = "default_add_status"
         const val K_AUTO_COMPLETE = "auto_complete_on_last"
@@ -142,7 +143,7 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
 
         /** Keys included in (and restored from) encrypted backups. Nothing secret. */
         val BACKUP_KEYS = setOf(
-            K_THEME, K_DYNAMIC, K_CONFIRM_DELETE, K_DEFAULT_STATUS, K_AUTO_COMPLETE, K_PLUS_ONE,
+            K_THEME, K_DYNAMIC, K_PALETTE, K_CONFIRM_DELETE, K_DEFAULT_STATUS, K_AUTO_COMPLETE, K_PLUS_ONE,
             K_SYNOPSIS, K_LIB_VIEW, K_LIB_SORT, K_NET_TIMEOUT, K_NET_RETRIES, K_FALLBACK_EMPTY,
             K_CONFLICT, K_QUIET_START, K_QUIET_END
         )

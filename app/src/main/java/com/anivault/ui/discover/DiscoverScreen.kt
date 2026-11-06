@@ -34,6 +34,19 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+enum class DiscoverSort(val label: String) {
+    DEFAULT("Default order"), SCORE("Highest score"), NEWEST("Newest first"), OLDEST("Oldest first"), TITLE("Title A–Z"), EPISODES("Most episodes");
+
+    fun apply(items: List<NormalizedAnime>): List<NormalizedAnime> = when (this) {
+        DEFAULT -> items
+        SCORE -> items.sortedByDescending { it.score ?: -1f }
+        NEWEST -> items.sortedByDescending { it.startDate ?: (it.year?.let { y -> y * 1000L } ?: Long.MIN_VALUE) }
+        OLDEST -> items.sortedBy { it.startDate ?: (it.year?.let { y -> y * 1000L } ?: Long.MAX_VALUE) }
+        TITLE -> items.sortedBy { it.title.lowercase() }
+        EPISODES -> items.sortedByDescending { it.episodes }
+    }
+}
+
 sealed interface DiscoverStatus {
     data object Idle : DiscoverStatus
     data object Loading : DiscoverStatus
@@ -54,6 +67,7 @@ data class DiscoverUi(
     val servedBy: String? = null,
     val skipped: List<SourceFailure> = emptyList(),
     val filters: SearchFilters = SearchFilters(),
+    val sort: DiscoverSort = DiscoverSort.DEFAULT,
     val inLibrary: Set<String> = emptySet(),
     val message: String? = null
 )
@@ -92,6 +106,7 @@ class DiscoverViewModel @Inject constructor(
     fun onQuery(q: String) { _ui.update { it.copy(query = q) }; queryFlow.value = q }
     fun setSection(s: BrowseSection) { _ui.update { it.copy(section = s) }; reload() }
     fun setFilters(f: SearchFilters) { _ui.update { it.copy(filters = f) }; reload() }
+    fun setSort(o: DiscoverSort) { _ui.update { it.copy(sort = o) } }
     fun retry() = reload()
     fun loadMore() { val u = _ui.value; if (u.hasNext && !u.loadingMore && u.status == DiscoverStatus.Content) load(reset = false) }
     fun consumeMessage() = _ui.update { it.copy(message = null) }
@@ -118,28 +133,44 @@ class DiscoverViewModel @Inject constructor(
             val q = u0.query.trim()
             if (reset) { page = 1; _ui.update { it.copy(status = DiscoverStatus.Loading, items = emptyList(), hasNext = false) } }
             else _ui.update { it.copy(loadingMore = true) }
-            val target = if (reset) 1 else page + 1
-            val result = when {
-                q.length in 1..1 -> { _ui.update { it.copy(status = DiscoverStatus.Idle) }; return@launch }
-                q.isNotEmpty() -> providers.search(q, target, u0.filters)
-                u0.sections.isEmpty() -> ProviderResult.NoSources
-                else -> providers.browse(u0.section, target, u0.filters)
-            }
-            when (result) {
-                is ProviderResult.Success -> {
+            var target = if (reset) 1 else page + 1
+            // Filters are applied to each fetched page, so a narrow filter (one genre) can leave a page nearly
+            // empty. Keep pulling pages until the list is reasonably full or the source runs out.
+            val filtered = u0.filters.activeCount > 0
+            var pulls = 0
+            var acc = if (reset) emptyList() else _ui.value.items
+            var result: ProviderResult
+            while (true) {
+                result = when {
+                    q.length in 1..1 -> { _ui.update { it.copy(status = DiscoverStatus.Idle) }; return@launch }
+                    q.isNotEmpty() -> providers.search(q, target, u0.filters)
+                    u0.sections.isEmpty() -> ProviderResult.NoSources
+                    else -> providers.browse(u0.section, target, u0.filters)
+                }
+                pulls++
+                if (result is ProviderResult.Success) {
                     page = target
+                    acc = TitleMatcher.dedupe(acc + result.items)
+                    if (filtered && result.hasNext && acc.size < 20 && pulls < 12) { target++; continue }
+                }
+                break
+            }
+            val res = result
+            val accFinal = acc
+            when (res) {
+                is ProviderResult.Success -> {
                     _ui.update { u ->
-                        val merged = if (reset) result.items else TitleMatcher.dedupe(u.items + result.items)
+                        val merged = accFinal
                         u.copy(
-                            items = merged, hasNext = result.hasNext, loadingMore = false,
+                            items = merged, hasNext = res.hasNext, loadingMore = false,
                             status = if (merged.isEmpty()) DiscoverStatus.Empty else DiscoverStatus.Content,
-                            servedBy = result.source.name, skipped = result.skipped
+                            servedBy = res.source.name, skipped = res.skipped
                         )
                     }
                 }
                 is ProviderResult.Failed -> _ui.update { u ->
                     // A failed "load more" keeps what is on screen and says so.
-                    if (reset) u.copy(status = DiscoverStatus.Error(result.failures), loadingMore = false)
+                    if (reset) u.copy(status = DiscoverStatus.Error(res.failures), loadingMore = false)
                     else u.copy(loadingMore = false, message = "Couldn't load more results")
                 }
                 ProviderResult.NoSources -> _ui.update { it.copy(status = DiscoverStatus.NoSources, loadingMore = false) }
@@ -165,6 +196,19 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             TopAppBar(title = { Text("Discover", fontWeight = FontWeight.Bold) }, actions = {
+                var sortMenu by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { sortMenu = true }) { Icon(Icons.Default.SwapVert, "Sort") }
+                    DropdownMenu(sortMenu, { sortMenu = false }) {
+                        DiscoverSort.values().forEach { o ->
+                            DropdownMenuItem(
+                                text = { Text(o.label, fontWeight = if (o == ui.sort) FontWeight.Bold else FontWeight.Normal) },
+                                leadingIcon = { if (o == ui.sort) Icon(Icons.Default.Check, null) },
+                                onClick = { viewModel.setSort(o); sortMenu = false }
+                            )
+                        }
+                    }
+                }
                 BadgedBox(badge = { val n = ui.filters.activeCount; if (n > 0) Badge { Text("$n") } }) {
                     IconButton(onClick = { showFilters = true }) { Icon(Icons.Default.FilterList, "Filters") }
                 }
@@ -198,7 +242,7 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
                     detail = st.failures.joinToString("\n") { "${it.sourceName}: ${it.kind.label}" }
                 )
                 DiscoverStatus.Content -> LazyColumn(state = listState, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(ui.items, key = { it.canonicalId }) { a -> ResultRow(a, a.canonicalId in ui.inLibrary) { detail = a } }
+                    items(remember(ui.items, ui.sort) { ui.sort.apply(ui.items) }, key = { it.canonicalId }) { a -> ResultRow(a, a.canonicalId in ui.inLibrary) { detail = a } }
                     if (ui.loadingMore) item { LoadingBox() }
                 }
             }

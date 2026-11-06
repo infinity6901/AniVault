@@ -53,6 +53,7 @@ data class VaultSearchState(
 @HiltViewModel
 class VaultViewModel @Inject constructor(
     private val repo: HentaiFallbackRepository,
+    private val mover: com.anivault.data.library.VaultMover,
     val session: VaultSession
 ) : ViewModel() {
     val entries: StateFlow<List<HVaultEntry>> = repo.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -75,6 +76,11 @@ class VaultViewModel @Inject constructor(
     fun save(e: ScrapedEntry) { viewModelScope.launch { repo.saveToVault(e) } }
     fun update(e: HVaultEntry) { viewModelScope.launch { repo.updateEntry(e) } }
     fun delete(id: String) { viewModelScope.launch { repo.deleteById(id) } }
+    fun deleteMany(ids: List<String>) { viewModelScope.launch { ids.forEach { repo.deleteById(it) } } }
+    fun moveToLibrary(ids: List<String>) { viewModelScope.launch { mover.toLibrary(ids) } }
+    fun setStatus(ids: List<String>, status: WatchStatus) {
+        viewModelScope.launch { ids.mapNotNull { repo.getById(it) }.forEach { repo.updateEntry(com.anivault.data.library.VaultRules.withStatus(it, status)) } }
+    }
     fun lock() = session.lock()
 }
 
@@ -130,7 +136,6 @@ private fun VaultContent(onBack: () -> Unit, vm: VaultViewModel) {
     val search by vm.search.collectAsStateWithLifecycle()
     var tab by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
-    var editing by remember { mutableStateOf<HVaultEntry?>(null) }
     Scaffold(containerColor = MaterialTheme.colorScheme.background, topBar = {
         TopAppBar(title = { Text("H-Vault") },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
@@ -147,22 +152,7 @@ private fun VaultContent(onBack: () -> Unit, vm: VaultViewModel) {
                     com.anivault.ui.settings.ApiSourcesScreen(onBack = { tab = 1 }, embedded = true, vm = hiltViewModel<com.anivault.ui.settings.VaultApiSourcesViewModel>())
                 }
             } else if (tab == 0) {
-                if (entries.isEmpty()) EmptyState("Nothing here yet", "Use Search to add entries.", Icons.Default.Lock)
-                else LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(entries, key = { it.id }) { e ->
-                        AniCard(Modifier.fillMaxWidth(), onClick = { editing = e }) {
-                            Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Poster(e.imageUrl, Modifier.width(56.dp).height(80.dp), RoundedCornerShape(8.dp))
-                                Spacer(Modifier.width(12.dp))
-                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text(e.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-                                    Text(if (e.totalEpisodes > 0) "${e.watchedEpisodes} / ${e.totalEpisodes}" else "${e.watchedEpisodes} watched", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
-                                    StatusChip(e.status)
-                                }
-                            }
-                        }
-                    }
-                }
+                VaultLibraryTab(entries, vm)
             } else {
                 OutlinedTextField(
                     query, { query = it }, singleLine = true, placeholder = { Text("Search H-Vault sources") },
@@ -193,23 +183,5 @@ private fun VaultContent(onBack: () -> Unit, vm: VaultViewModel) {
                 }
             }
         }
-    }
-    editing?.let { e0 ->
-        var e by remember(e0.id) { mutableStateOf(e0) }
-        var confirm by remember { mutableStateOf(false) }
-        AlertDialog(onDismissRequest = { editing = null }, title = { Text(e.title, maxLines = 2, overflow = TextOverflow.Ellipsis) }, text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) { WatchStatus.values().forEach { s -> FilterChip(e.status == s, { e = e.copy(status = s) }, { Text(s.label) }) } }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { e = e.copy(watchedEpisodes = (e.watchedEpisodes - 1).coerceAtLeast(0)) }) { Icon(Icons.Default.Remove, "One less") }
-                    Text("${e.watchedEpisodes}${if (e.totalEpisodes > 0) " / ${e.totalEpisodes}" else ""}")
-                    IconButton(onClick = { e = e.copy(watchedEpisodes = if (e.totalEpisodes > 0) (e.watchedEpisodes + 1).coerceAtMost(e.totalEpisodes) else e.watchedEpisodes + 1) }) { Icon(Icons.Default.Add, "One more") }
-                }
-                Text(if (e.rating > 0) "Rating ${"%.1f".format(e.rating)}" else "Not rated", fontSize = 12.sp)
-                Slider(e.rating, { e = e.copy(rating = Math.round(it * 2) / 2f) }, valueRange = 0f..10f, steps = 19)
-            }
-        }, confirmButton = { TextButton(onClick = { vm.update(e); editing = null }) { Text("Save") } },
-            dismissButton = { Row { TextButton(onClick = { confirm = true }) { Text("Remove", color = MaterialTheme.colorScheme.error) }; TextButton(onClick = { editing = null }) { Text("Cancel") } } })
-        if (confirm) ConfirmDialog("Remove from H-Vault?", "This entry will be deleted.", "Remove", { vm.delete(e.id); confirm = false; editing = null }, { confirm = false }, destructive = true)
     }
 }
