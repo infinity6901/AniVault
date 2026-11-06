@@ -22,8 +22,8 @@ Kotlin · Jetpack Compose · Material 3 · Room + SQLCipher · No ads, no analyt
   </tr>
   <tr>
     <td><img src="docs/screenshots/04-discover.jpg" width="220" alt="Discover"/><br/><sub>Discover: trending, popular, this season, top rated</sub></td>
-    <td><img src="docs/screenshots/15-anime-details.jpg" width="220" alt="Anime details"/><br/><sub>Title sheet with synopsis and one-tap add</sub></td>
-    <td><img src="docs/screenshots/16-library-entry.jpg" width="220" alt="Library entry"/><br/><sub>Edit status, progress, rating and notes</sub></td>
+    <td><img src="docs/screenshots/16-anime-details.jpg" width="220" alt="Anime details"/><br/><sub>Title sheet with synopsis and one-tap add</sub></td>
+    <td><img src="docs/screenshots/17-library-entry.jpg" width="220" alt="Library entry"/><br/><sub>Edit status, progress, rating and notes</sub></td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/18-entry-synopsis-move.jpg" width="220" alt="Move to H-Vault"/><br/><sub>Move a title to H-Vault from its sheet</sub></td>
