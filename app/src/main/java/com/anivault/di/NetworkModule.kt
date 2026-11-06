@@ -6,18 +6,29 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 import javax.inject.Named
 import javax.inject.Singleton
 
+/**
+ * NOTE: no HttpLoggingInterceptor anywhere. Request lines contain search queries (which in
+ * H-Vault mode are private titles) and Cloudflare cookies, and nothing here may log those.
+ */
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
 
-    // ── Cloudflare-bypassing client — hanime.tv (primary H-Vault source) ───
+    /** Shared client for catalog providers and account APIs (timeouts are applied per call). */
+    @Provides
+    @Singleton
+    @Named("api")
+    fun provideApiClient(): OkHttpClient =
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build()
+
+    /** Primary H-Vault source client (resolves the site's browser check through a WebView). */
     @Provides
     @Singleton
     @Named("scraper")
@@ -26,19 +37,9 @@ object NetworkModule {
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .addInterceptor(cfInterceptor)
-            .addInterceptor(
-                HttpLoggingInterceptor().apply {
-                    level = HttpLoggingInterceptor.Level.HEADERS
-                }
-            )
             .build()
 
-    // ── Plain scraper client — watchhentai.net (fallback H-Vault source) ───
-    //
-    // watchhentai.net does not currently sit behind Cloudflare Bot Management,
-    // so a plain client with a realistic User-Agent is sufficient.
-    // If they add CF protection in future, swap this for the CF-intercepting
-    // client above (and inject a second CloudflareInterceptor instance).
+    /** Plain client for the fallback H-Vault source. */
     @Provides
     @Singleton
     @Named("watchhentai")
@@ -46,10 +47,5 @@ object NetworkModule {
         OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(45, TimeUnit.SECONDS)
-            .addInterceptor(
-                HttpLoggingInterceptor().apply {
-                    level = HttpLoggingInterceptor.Level.BASIC
-                }
-            )
             .build()
 }

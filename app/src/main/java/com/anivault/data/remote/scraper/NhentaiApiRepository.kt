@@ -1,6 +1,5 @@
 package com.anivault.data.remote.scraper
 
-import android.util.Log
 import com.anivault.data.remote.model.ScrapedEntry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -28,7 +27,6 @@ class NhentaiApiRepository @Inject constructor(
     override val sourceName: String = "nhentai.net"
 
     companion object {
-        private const val TAG = "NhentaiApi"
         private const val BASE_URL   = "https://nhentai.net"
         private const val SEARCH_URL = "$BASE_URL/api/galleries/search?query=%s&page=%d"
         private const val COVER_URL  = "https://t.nhentai.net/galleries/%s/cover.%s"
@@ -36,13 +34,10 @@ class NhentaiApiRepository @Inject constructor(
 
     override suspend fun search(query: String, page: Int): List<ScrapedEntry> =
         withContext(Dispatchers.IO) {
-            runCatching {
-                val url  = SEARCH_URL.format(URLEncoder.encode(query, "UTF-8"), page)
-                val body = fetch(url) ?: return@runCatching emptyList()
-                parseSearchResults(body)
-            }.onFailure {
-                Log.w(TAG, "nhentai search failed: ${it.message}")
-            }.getOrElse { emptyList() }
+            // Failures propagate so the caller can tell "source down" from "no results".
+            val url  = SEARCH_URL.format(URLEncoder.encode(query, "UTF-8"), page)
+            val body = fetch(url) ?: return@withContext emptyList()
+            parseSearchResults(body)
         }
 
     override suspend fun fetchDetail(detailUrl: String): ScrapedEntry? =
@@ -70,8 +65,7 @@ class NhentaiApiRepository @Inject constructor(
 
         return okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
-                Log.w(TAG, "HTTP ${response.code} from $url")
-                null
+                throw java.io.IOException("HTTP ${response.code}")
             } else {
                 response.body?.string()
             }

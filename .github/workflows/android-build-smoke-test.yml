@@ -6,6 +6,15 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish a GitHub pre-release with the APKs when everything passes'
+        type: boolean
+        default: false
+      tag:
+        description: 'Release tag when publishing from a manual run (default: v<versionName>)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -21,88 +30,182 @@ env:
   DIAG_DIR: diagnostics
   EMULATOR_API: '34'
 
+# Pipeline:   Plan ─┬─ Gate 1: build + unit tests + lint ─┐
+#                   └─ Release APK (R8) ──────────────────┼─ Stage 2: emulator checks ─ QA + failure report ─ Publish GitHub Release
 jobs:
-  build-and-smoke-test:
-    name: Build APKs, smoke-test on emulator, report
+  # ── Plan ──────────────────────────────────────────────────────────────────
+  plan:
+    name: Plan
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-
+    timeout-minutes: 10
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        id: jdk
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      # The ubuntu-latest image already ships the Android SDK (ANDROID_HOME) with
-      # licenses accepted; android-actions/setup-android was failing while fetching
-      # the remote package list, so it is not used. Print what is available instead.
-      - name: Show preinstalled Android SDK
-        id: sdk
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      # A fixed signing key keeps updates installable over the previous build. It comes from the repository
+      # secret ANIVAULT_KEYSTORE_B64 (base64 of the keystore; alias androiddebugkey, password "android").
+      # Without the secret (forks, first run) a throw-away key is made and the summary says so.
+      - name: Install the signing key (secret, or a throw-away one)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANIVAULT_KEYSTORE_B64 }}
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools"
-
-      - name: Set up Gradle (wrapper version, with caching)
-        id: gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Prepare folders
-        run: mkdir -p "$REPORT_DIR" "$DIAG_DIR" apks
-
-      # The debug signing key is created explicitly so it is guaranteed to exist
-      # and so its fingerprint can be checked against both APKs afterwards.
-      - name: Ensure Android debug signing key
-        id: key
-        run: |
-          mkdir -p ~/.android
-          if [ ! -f ~/.android/debug.keystore ]; then
-            keytool -genkeypair -v -keystore ~/.android/debug.keystore \
+          export ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home/.android"
+          mkdir -p "$ANDROID_USER_HOME" keystore
+          if [[ -n "$KEYSTORE_B64" ]]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$ANDROID_USER_HOME/debug.keystore"
+            printf '## Signing key\nUsing the fixed key from the ANIVAULT_KEYSTORE_B64 secret: updates install over earlier builds.\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            keytool -genkeypair -keystore "$ANDROID_USER_HOME/debug.keystore" \
               -storepass android -keypass android -alias androiddebugkey \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
+            echo "::warning::No ANIVAULT_KEYSTORE_B64 secret: signed with a throw-away key, so this APK will not update over a previous install."
+            printf '## Signing key\n**Throw-away key** (secret ANIVAULT_KEYSTORE_B64 not set): this build will not install as an update over earlier ones.\n' >> "$GITHUB_STEP_SUMMARY"
           fi
-          keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey | grep -E 'SHA256|Owner'
+          cp "$ANDROID_USER_HOME/debug.keystore" keystore/
+      - uses: actions/upload-artifact@v4
+        with: { name: ci-keystore, path: keystore/debug.keystore, retention-days: 1 }
+      - name: Decide whether this run publishes a release
+        id: decide
+        run: |
+          if [[ "${{ github.ref_type }}" == tag || "${{ inputs.publish }}" == true ]]; then p=true; else p=false; fi
+          echo "publish=$p" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Plan"
+            echo "1. **Gate 1** – debug build, unit tests, lint"
+            echo "2. **Release APK (R8)** – minified FOSS release build, in parallel"
+            echo "3. **Stage 2** – verify signatures of every APK, then emulator smoke test (universal debug + x86_64 release)"
+            echo "4. **QA + failure report** – always runs"
+            echo "5. **Publish GitHub Release** – this run: \`$p\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build debug and FOSS release APKs
+  # ── Gate 1: build + unit tests + lint ─────────────────────────────────────
+  gate1:
+    name: "Gate 1: build + unit tests + lint"
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      build: ${{ steps.build.outcome }}
+      checks: ${{ steps.checks.outcome }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/download-artifact@v4
+        with: { name: ci-keystore, path: keystore }
+      - name: Install the shared debug key
+        run: |
+          echo "ANDROID_USER_HOME=$RUNNER_TEMP/android-user-home/.android" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/android-user-home/.android" "$DIAG_DIR" apks
+          cp keystore/debug.keystore "$RUNNER_TEMP/android-user-home/.android/"
+      - name: Build debug APK
         id: build
         continue-on-error: true
         run: |
           set -o pipefail
-          ./gradlew --no-daemon --stacktrace :app:assembleDebug :app:assembleRelease 2>&1 | tee "$DIAG_DIR/gradle-build.log"
-
-      - name: Collect and verify APKs (debug-key signature)
-        id: verify
-        if: steps.build.outcome == 'success'
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          cp app/build/outputs/apk/debug/app-debug.apk apks/AniVault-debug.apk
-          cp app/build/outputs/apk/release/app-release.apk apks/AniVault-foss-release.apk
-          scripts/verify-apks.sh apks/AniVault-debug.apk apks/AniVault-foss-release.apk 2>&1 | tee "$DIAG_DIR/verify-apks.log"
-
-      # Does not block the emulator test: a lint/unit-test problem should not hide APK/runtime problems.
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug 2>&1 | tee "$DIAG_DIR/gradle-build-debug.log"
+          ls -l app/build/outputs/apk/debug/
+          cp app/build/outputs/apk/debug/app-universal-debug.apk apks/AniVault-debug-universal.apk
       - name: Unit tests and lint
         id: checks
         continue-on-error: true
         run: |
           set -o pipefail
           ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest :app:lintDebug 2>&1 | tee "$DIAG_DIR/gradle-checks.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: apk-debug, path: apks/*.apk, if-no-files-found: ignore, retention-days: 14 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diag-gate1
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            diagnostics/**
+            app/build/reports/tests/**
+            app/build/reports/lint-results-debug.*
+      - name: Fail the gate if build or checks failed
+        if: steps.build.outcome == 'failure' || steps.checks.outcome == 'failure'
+        run: |
+          echo "::error::Gate 1 failed (build: ${{ steps.build.outcome }}, tests/lint: ${{ steps.checks.outcome }}). See the QA report."
+          exit 1
 
+  # ── Release APK (R8), parallel to Gate 1 ──────────────────────────────────
+  release:
+    name: Release APK (R8)
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      build: ${{ steps.build.outcome }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/download-artifact@v4
+        with: { name: ci-keystore, path: keystore }
+      - name: Install the shared debug key
+        run: |
+          echo "ANDROID_USER_HOME=$RUNNER_TEMP/android-user-home/.android" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/android-user-home/.android" "$DIAG_DIR" apks
+          cp keystore/debug.keystore "$RUNNER_TEMP/android-user-home/.android/"
+      - name: Build FOSS release APK (minified with R8)
+        id: build
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :app:assembleRelease 2>&1 | tee "$DIAG_DIR/gradle-build-release.log"
+          ls -l app/build/outputs/apk/release/
+          for f in app/build/outputs/apk/release/app-*-release.apk; do
+            abi="$(basename "$f" -release.apk)"; abi="${abi#app-}"
+            cp "$f" "apks/AniVault-foss-release-$abi.apk"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: apk-release, path: apks/*.apk, if-no-files-found: ignore, retention-days: 14 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diag-release
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            diagnostics/**
+            app/build/outputs/mapping/release/mapping.txt
+
+  # ── Stage 2: emulator checks ──────────────────────────────────────────────
+  emulator:
+    name: "Stage 2: emulator checks"
+    needs: [gate1, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      verify: ${{ steps.verify.outcome }}
+      smoke: ${{ steps.smoke.outcome }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { pattern: apk-*, path: apks, merge-multiple: true }
+      - uses: actions/download-artifact@v4
+        with: { name: ci-keystore, path: keystore }
+      - name: Verify APK signatures (shared debug key)
+        id: verify
+        run: |
+          mkdir -p "$REPORT_DIR" "$DIAG_DIR"
+          set -o pipefail
+          DEBUG_KEYSTORE="$PWD/keystore/debug.keystore" scripts/verify-apks.sh apks/*.apk 2>&1 | tee "$DIAG_DIR/verify-apks.log"
       - name: Enable KVM for the emulator
-        if: steps.verify.outcome == 'success'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-
       - name: Emulator smoke test (debug + FOSS release)
         id: smoke
-        if: steps.verify.outcome == 'success'
         continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -114,85 +217,127 @@ jobs:
           emulator-boot-timeout: 600
           emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -memory 3072
           # One line only: the action runs each script line in its own shell.
-          script: bash scripts/smoke-test.sh "Debug APK=apks/AniVault-debug.apk" "FOSS release APK=apks/AniVault-foss-release.apk"
-
-      - name: Generate report and log failure causes
+          script: bash scripts/smoke-test.sh "Debug APK (universal)=apks/AniVault-debug-universal.apk" "FOSS release APK (x86_64)=apks/AniVault-foss-release-x86_64.apk"
+      - uses: actions/upload-artifact@v4
         if: always()
-        env:
-          BUILD_OUTCOME: ${{ steps.build.outcome }}
-          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
-          CHECKS_OUTCOME: ${{ steps.checks.outcome }}
-          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
-          SETUP_OUTCOMES: "JDK=${{ steps.jdk.outcome }} Android-SDK=${{ steps.sdk.outcome }} Gradle=${{ steps.gradle.outcome }} Debug-key=${{ steps.key.outcome }}"
-          JOB_STATUS: ${{ job.status }}
-        run: scripts/ci-report.sh
-
-      - name: Upload APKs
-        if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: anivault-apks-${{ github.run_number }}
-          if-no-files-found: warn
+          name: diag-emulator
           retention-days: 14
-          path: apks/*.apk
+          if-no-files-found: ignore
+          path: |
+            diagnostics/**
+            ci-report/**
+      - name: Fail the stage if the smoke test failed
+        if: steps.smoke.outcome == 'failure'
+        run: |
+          echo "::error::Emulator smoke test failed. See the QA report."
+          exit 1
 
-      - name: Upload reports and logs
+  # ── QA + failure report (always) ──────────────────────────────────────────
+  report:
+    name: QA + failure report
+    needs: [plan, gate1, release, emulator]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { pattern: diag-*, path: ., merge-multiple: true }
+      - uses: actions/download-artifact@v4
+        with: { pattern: apk-*, path: apks, merge-multiple: true }
+      - name: Generate report and log failure causes
+        env:
+          BUILD_OUTCOME: ${{ (needs.gate1.outputs.build == 'failure' || needs.release.result == 'failure') && 'failure' || (needs.gate1.outputs.build || 'skipped') }}
+          VERIFY_OUTCOME: ${{ needs.emulator.outputs.verify }}
+          CHECKS_OUTCOME: ${{ needs.gate1.outputs.checks }}
+          SMOKE_OUTCOME: ${{ needs.emulator.outputs.smoke }}
+          SETUP_OUTCOMES: "Plan=${{ needs.plan.result }}"
+          JOB_STATUS: ${{ contains(needs.*.result, 'failure') && 'failure' || 'success' }}
+        run: |
+          mkdir -p "$DIAG_DIR"
+          cat "$DIAG_DIR"/gradle-build-*.log > "$DIAG_DIR/gradle-build.log" 2>/dev/null || true
+          scripts/ci-report.sh
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
+        with: { name: "anivault-apks-${{ github.run_number }}", path: apks/*.apk, if-no-files-found: warn, retention-days: 14 }
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: anivault-reports-${{ github.run_number }}
+          name: "anivault-reports-${{ github.run_number }}"
           if-no-files-found: warn
           retention-days: 14
           path: |
             ci-report/**
             diagnostics/**
-            app/build/outputs/mapping/release/mapping.txt
-            app/build/reports/tests/**
-            app/build/reports/lint-results-debug.*
-
+            app/build/**
       - name: Fail the run if any stage failed
-        if: always()
-        env:
-          OUTCOMES: ${{ steps.jdk.outcome }} ${{ steps.sdk.outcome }} ${{ steps.gradle.outcome }} ${{ steps.key.outcome }} ${{ steps.build.outcome }} ${{ steps.verify.outcome }} ${{ steps.checks.outcome }} ${{ steps.smoke.outcome }}
-          JOB_STATUS: ${{ job.status }}
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
-          echo "Outcomes: $OUTCOMES (job status so far: $JOB_STATUS)"
-          if [[ " $OUTCOMES " == *" failure "* || "$JOB_STATUS" == failure ]]; then
-            echo '::error::One or more stages failed. See the run summary and ci-report/REPORT.md in the artifact for the cause.'
-            exit 1
-          fi
+          echo '::error::One or more stages failed. See the run summary and ci-report/REPORT.md in the artifact for the cause.'
+          exit 1
 
-  # Only runs for version tags, and only if the build, verification, tests and
-  # emulator smoke test all passed (the job above fails otherwise).
-  release:
+  # ── Publish GitHub Release ────────────────────────────────────────────────
+  publish:
     name: Publish GitHub Release
-    needs: build-and-smoke-test
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [plan, report]
+    if: needs.plan.outputs.publish == 'true' && needs.report.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Check tag matches app versionName
-        run: |
-          name="$(sed -n 's/.*versionName *= *"\(.*\)".*/\1/p' app/build.gradle.kts | head -1)"
-          if [[ "v$name" != "$GITHUB_REF_NAME" ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match versionName $name in app/build.gradle.kts"; exit 1
-          fi
-
-      - name: Download APKs
-        uses: actions/download-artifact@v4
-        with:
-          name: anivault-apks-${{ github.run_number }}
-          path: apks
-
-      - name: Create release and attach APKs
+      - uses: actions/download-artifact@v4
+        with: { pattern: apk-*, path: apks, merge-multiple: true }
+      - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          SHA: ${{ github.sha }}
+          RUN: ${{ github.run_number }}
         run: |
-          ls -l apks
-          notes='Debug-key-signed builds for direct installation (not for Google Play). Uninstall any earlier build signed with a different key before installing. Each APK passed the CI emulator smoke test (install, launch, no crash/ANR).'
-          gh release create "$GITHUB_REF_NAME" apks/*.apk \
-            --repo "$GITHUB_REPOSITORY" --title "AniVault $GITHUB_REF_NAME" \
-            --notes "$notes" --generate-notes --verify-tag
+          VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          if [[ "$REF_TYPE" == tag ]]; then TAG="$REF_NAME"; elif [[ -n "$INPUT_TAG" ]]; then TAG="$INPUT_TAG"; else TAG="v$VER"; fi
+          if gh release view "$TAG" >/dev/null 2>&1; then TAG="$TAG-build.$RUN"; fi
+          (cd apks && sha256sum *.apk) > checksums.txt
+          {
+            echo "## AniVault $VER"
+            echo
+            echo "Offline-first anime tracker with a biometric-locked H-Vault, two-way sync with AniList, MyAnimeList and Kitsu, encrypted backups and PDF/Word/JSON export."
+            echo
+            echo "### Which file do I need?"
+            echo "| File | For |"
+            echo "| --- | --- |"
+            echo "| \`AniVault-foss-release-arm64-v8a.apk\` | **Most phones** (64-bit ARM) |"
+            echo "| \`AniVault-foss-release-armeabi-v7a.apk\` | Older 32-bit ARM phones |"
+            echo "| \`AniVault-foss-release-x86_64.apk\`, \`-x86.apk\` | Emulators, some Chromebooks |"
+            echo "| \`AniVault-foss-release-universal.apk\` | Not sure — works on everything, larger download |"
+            echo "| \`AniVault-debug-universal.apk\` | Debug build with an in-app log screen, for bug reports |"
+            echo
+            echo "Requires Android 8.0 (API 26) or newer."
+            echo
+            echo "### Highlights"
+            echo "- **Library:** grid/list, search, filters, sort, multi-select, undo; Completed fills progress; watch-time estimates."
+            echo "- **Discover:** trending/popular/season/top, genre/status/country/format/score/year/episode filters that keep loading until the list fills, and a sort menu."
+            echo "- **Sources:** AniList, MyAnimeList, Jikan-compatible, Jikan-Edge, Kitsu and Tenrai with ordered fallback."
+            echo "- **Account sync:** two-way, queued offline, optional delete-on-account; AniList requests are batched and rate-limit aware."
+            echo "- **H-Vault:** library-style layout, its own sources, manual move between library and vault, progress sync from the unlocked vault, and a vault tag on AniList/Kitsu so other devices restore titles correctly."
+            echo "- **Backup & export:** AES-256-GCM encrypted backup with per-part toggles (library, H-Vault, settings, sign-ins); PDF/Word/JSON export with covers and synopsis; H-Vault export behind authentication."
+            echo "- **Appearance:** dark/light/system plus AniVault, Material You, Frosted glass, AMOLED black, Midnight blue, Forest, Sunset and Sakura styles."
+            echo
+            echo "### Installing and updating"
+            echo "These APKs are signed with the project's fixed key, so each release installs over the previous one. If Android refuses the update with a signature error, the installed copy used a different key: make an encrypted backup (enable *Include sign-ins and client IDs* if wanted), uninstall once, install this build, then restore."
+            echo
+            echo "Built by CI from commit \`$SHA\` after unit tests, lint and an emulator install/launch check passed. Not distributed through any app store."
+            echo
+            echo "### SHA-256"
+            echo '```'
+            cat checksums.txt
+            echo '```'
+          } > notes.md
+          PRE=""
+          if [[ "$REF_TYPE" != tag && -z "$INPUT_TAG" ]]; then PRE="--prerelease"; fi
+          gh release create "$TAG" apks/*.apk checksums.txt --target "$SHA" --title "AniVault $VER" --notes-file notes.md $PRE

@@ -14,7 +14,7 @@ android {
         minSdk        = 26
         targetSdk     = 34
         versionCode   = 2
-        versionName   = "2.0.0"
+        versionName   = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -23,6 +23,16 @@ android {
         ksp {
             arg("room.schemaLocation", "$projectDir/schemas")
             arg("room.incremental",    "true")
+        }
+    }
+
+    // One APK per CPU architecture (smaller downloads), plus a universal APK that runs anywhere.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+            isUniversalApk = true
         }
     }
 
@@ -63,6 +73,10 @@ android {
         kotlinCompilerExtensionVersion = "1.5.14"
     }
 
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -92,6 +106,8 @@ dependencies {
     // ── Room ───────────────────────────────────────────────────────────────
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
+    implementation(libs.sqlcipher)
+    implementation(libs.sqlite.ktx)
     ksp(libs.room.compiler)
 
     // ── Hilt ───────────────────────────────────────────────────────────────
@@ -119,4 +135,13 @@ dependencies {
 
     // ── DataStore ─────────────────────────────────────────────────────────
     implementation(libs.datastore.preferences)
+
+    // ── Background work (reminders) ────────────────────────────────────────
+    implementation(libs.work.runtime.ktx)
+
+    // ── Unit tests (pure JVM) ──────────────────────────────────────────────
+    testImplementation(libs.junit)
+    // Android's org.json is a stub in JVM unit tests; use the real implementation there.
+    testImplementation("org.json:json:20231013")
+    testImplementation(libs.coroutines.test)
 }

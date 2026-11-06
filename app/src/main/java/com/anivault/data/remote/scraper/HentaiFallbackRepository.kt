@@ -1,6 +1,6 @@
 package com.anivault.data.remote.scraper
 
-import android.util.Log
+import com.anivault.core.Sanitizer
 import com.anivault.data.local.dao.HVaultDao
 import com.anivault.data.local.entity.HVaultEntry
 import com.anivault.data.local.model.WatchStatus
@@ -10,7 +10,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import javax.inject.Named
 import javax.inject.Singleton
+import com.anivault.data.provider.ProviderRepository
+import com.anivault.data.provider.ProviderResult
 
 /**
  * Orchestrates H-Vault data retrieval across three [HentaiSource] backends:
@@ -26,12 +29,11 @@ class HentaiFallbackRepository @Inject constructor(
     private val primary:    HentaiScraperRepository,
     private val fallback:   WatchHentaiScraperRepository,
     private val nhentai:    NhentaiApiRepository,
-    private val hVaultDao:  HVaultDao
+    @Named("vault") private val vaultProviders: ProviderRepository,
+    private val hVaultDao:  HVaultDao,
+    private val remoteOps:  com.anivault.data.sync.RemoteOps,
+    private val prefs:      com.anivault.core.AppPrefs
 ) {
-    companion object {
-        private const val TAG = "HentaiFallback"
-    }
-
     // ── Vault observation (source-agnostic) ────────────────────────────────
 
     fun observeAll(): Flow<List<HVaultEntry>> = hVaultDao.observeAll()
@@ -43,55 +45,34 @@ class HentaiFallbackRepository @Inject constructor(
 
     suspend fun search(query: String, page: Int = 1): SearchResult =
         withContext(Dispatchers.IO) {
-
-            // 1. Primary — hanime.tv
-            val primaryResults = try {
-                primary.search(query, page)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                Log.w(TAG, "Primary (${primary.sourceName}) failed: ${error.message}")
-                emptyList()
+            val failures = mutableListOf<String>()
+            var answered = false
+            // 1. The H-Vault API sources (Settings inside H-Vault): reliable APIs with uncensored covers.
+            when (val r = vaultProviders.search(query, page)) {
+                is ProviderResult.Success -> {
+                    answered = true
+                    if (r.items.isNotEmpty()) return@withContext SearchResult(r.items.map { it.toScraped("v-${r.source.id}") }, r.source.name, false)
+                }
+                is ProviderResult.Failed -> r.failures.forEach { failures += "${it.sourceName}: ${it.kind.label}" }
+                ProviderResult.NoSources -> failures += "No H-Vault API source is enabled"
             }
-
-            if (primaryResults.isNotEmpty()) {
-                Log.d(TAG, "${primary.sourceName}: ${primaryResults.size} results")
-                return@withContext SearchResult(primaryResults, primary.sourceName, false)
+            // 2. Scrapers, which sites often block with bot checks.
+            val scrapers: List<HentaiSource> = listOf(primary, fallback, nhentai)
+            for (src in scrapers) {
+                try {
+                    val results = src.search(query, page)
+                    answered = true
+                    if (results.isNotEmpty()) return@withContext SearchResult(results, src.sourceName, true)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    failures += "${src.sourceName}: ${Sanitizer.clean(error.message, 100).ifBlank { "request failed" }}"
+                }
             }
-
-            // 2. Fallback 1 — watchhentai.net
-            Log.i(TAG, "Primary empty — trying ${fallback.sourceName}")
-            val fallbackResults = try {
-                fallback.search(query, page)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                Log.w(TAG, "${fallback.sourceName} failed: ${error.message}")
-                emptyList()
+            if (!answered) {
+                throw IllegalStateException("H-Vault search could not reach any source. ${failures.joinToString(" • ")}")
             }
-
-            if (fallbackResults.isNotEmpty()) {
-                Log.d(TAG, "${fallback.sourceName}: ${fallbackResults.size} results")
-                return@withContext SearchResult(fallbackResults, fallback.sourceName, true)
-            }
-
-            // 3. Fallback 2 — nhentai.net JSON API
-            Log.i(TAG, "Fallback-1 empty — trying ${nhentai.sourceName}")
-            val nhentaiResults = try {
-                nhentai.search(query, page)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                Log.w(TAG, "${nhentai.sourceName} failed: ${error.message}")
-                emptyList()
-            }
-
-            Log.d(TAG, "${nhentai.sourceName}: ${nhentaiResults.size} results")
-            SearchResult(
-                entries      = nhentaiResults,
-                sourceName   = nhentai.sourceName,
-                usedFallback = nhentaiResults.isNotEmpty()
-            )
+            SearchResult(emptyList(), scrapers.last().sourceName, false)
         }
 
     // ── Detail fetch (tries all sources) ──────────────────────────────────
@@ -109,7 +90,6 @@ class HentaiFallbackRepository @Inject constructor(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
-                    Log.w(TAG, "${src.sourceName} detail failed: ${error.message}")
                     null
                 }
                 if (result != null) return@withContext result
@@ -141,11 +121,15 @@ class HentaiFallbackRepository @Inject constructor(
     }
 
     suspend fun updateEntry(entry: HVaultEntry) = withContext(Dispatchers.IO) {
-        hVaultDao.upsert(entry.copy(updatedAt = System.currentTimeMillis()))
+        hVaultDao.upsert(com.anivault.data.library.VaultRules.normalize(entry).copy(updatedAt = System.currentTimeMillis()))
     }
 
     suspend fun deleteById(id: String) = withContext(Dispatchers.IO) {
         hVaultDao.deleteById(id)
+        // Same rule as the library: deleting also removes the title from the linked accounts.
+        val ids = com.anivault.data.sync.VaultOwnership.keysOfVaultId(id) + com.anivault.data.sync.VaultOwnership.keysOf(remoteOps.link(id))
+        if (prefs.deleteOnAccounts) ids.forEach { k -> val (s, m) = k.split(":", limit = 2); remoteOps.enqueue(com.anivault.data.sync.RemoteOp(com.anivault.data.sync.OpType.DELETE, s, m)) }
+        remoteOps.setLink(id, "")
     }
 
     suspend fun getAll(): List<HVaultEntry> = withContext(Dispatchers.IO) {
@@ -168,3 +152,15 @@ class HentaiFallbackRepository @Inject constructor(
         val usedFallback: Boolean
     )
 }
+
+internal fun com.anivault.data.provider.NormalizedAnime.toScraped(prefix: String) = ScrapedEntry(
+    id = "$prefix:$providerId",
+    title = title,
+    coverUrl = coverUrl,
+    tags = genres,
+    studio = null,
+    isCensored = false,
+    episodeCount = episodes,
+    durationMinutes = durationMinutes,
+    detailUrl = "catalog:$prefix:$providerId"
+)
