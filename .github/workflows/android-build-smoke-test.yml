@@ -11,6 +11,10 @@ on:
         description: 'Publish a GitHub pre-release with the APKs when everything passes'
         type: boolean
         default: false
+      tag:
+        description: 'Release tag when publishing from a manual run (default: v<versionName>)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -289,11 +293,51 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          SHA: ${{ github.sha }}
+          RUN: ${{ github.run_number }}
         run: |
-          if [[ "${{ github.ref_type }}" == tag ]]; then
-            gh release create "${{ github.ref_name }}" apks/*.apk --title "AniVault ${{ github.ref_name }}" --generate-notes
-          else
-            gh release create "v1.1.0-ci.${{ github.run_number }}" apks/*.apk --prerelease --target "${{ github.sha }}" \
-              --title "AniVault CI build #${{ github.run_number }}" \
-              --notes "Debug-signed FOSS builds (one APK per architecture: arm64-v8a is right for most phones; universal works everywhere) from commit ${{ github.sha }}. Not for the Play Store."
-          fi
+          VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          if [[ "$REF_TYPE" == tag ]]; then TAG="$REF_NAME"; elif [[ -n "$INPUT_TAG" ]]; then TAG="$INPUT_TAG"; else TAG="v$VER"; fi
+          if gh release view "$TAG" >/dev/null 2>&1; then TAG="$TAG-build.$RUN"; fi
+          (cd apks && sha256sum *.apk) > checksums.txt
+          {
+            echo "## AniVault $VER"
+            echo
+            echo "Offline-first anime tracker with a biometric-locked H-Vault, two-way sync with AniList, MyAnimeList and Kitsu, encrypted backups and PDF/Word/JSON export."
+            echo
+            echo "### Which file do I need?"
+            echo "| File | For |"
+            echo "| --- | --- |"
+            echo "| \`AniVault-foss-release-arm64-v8a.apk\` | **Most phones** (64-bit ARM) |"
+            echo "| \`AniVault-foss-release-armeabi-v7a.apk\` | Older 32-bit ARM phones |"
+            echo "| \`AniVault-foss-release-x86_64.apk\`, \`-x86.apk\` | Emulators, some Chromebooks |"
+            echo "| \`AniVault-foss-release-universal.apk\` | Not sure — works on everything, larger download |"
+            echo "| \`AniVault-debug-universal.apk\` | Debug build with an in-app log screen, for bug reports |"
+            echo
+            echo "Requires Android 8.0 (API 26) or newer."
+            echo
+            echo "### Highlights"
+            echo "- **Library:** grid/list, search, filters, sort, multi-select, undo; Completed fills progress; watch-time estimates."
+            echo "- **Discover:** trending/popular/season/top, genre/status/country/format/score/year/episode filters that keep loading until the list fills, and a sort menu."
+            echo "- **Sources:** AniList, MyAnimeList, Jikan-compatible, Jikan-Edge, Kitsu and Tenrai with ordered fallback."
+            echo "- **Account sync:** two-way, queued offline, optional delete-on-account; AniList requests are batched and rate-limit aware."
+            echo "- **H-Vault:** library-style layout, its own sources, manual move between library and vault, progress sync from the unlocked vault, and a vault tag on AniList/Kitsu so other devices restore titles correctly."
+            echo "- **Backup & export:** AES-256-GCM encrypted backup with per-part toggles (library, H-Vault, settings, sign-ins); PDF/Word/JSON export with covers and synopsis; H-Vault export behind authentication."
+            echo "- **Appearance:** dark/light/system plus AniVault, Material You, Frosted glass, AMOLED black, Midnight blue, Forest, Sunset and Sakura styles."
+            echo
+            echo "### Installing and updating"
+            echo "These APKs are signed with the project's fixed key, so each release installs over the previous one. If Android refuses the update with a signature error, the installed copy used a different key: make an encrypted backup (enable *Include sign-ins and client IDs* if wanted), uninstall once, install this build, then restore."
+            echo
+            echo "Built by CI from commit \`$SHA\` after unit tests, lint and an emulator install/launch check passed. Not distributed through any app store."
+            echo
+            echo "### SHA-256"
+            echo '```'
+            cat checksums.txt
+            echo '```'
+          } > notes.md
+          PRE=""
+          if [[ "$REF_TYPE" != tag && -z "$INPUT_TAG" ]]; then PRE="--prerelease"; fi
+          gh release create "$TAG" apks/*.apk checksums.txt --target "$SHA" --title "AniVault $VER" --notes-file notes.md $PRE
