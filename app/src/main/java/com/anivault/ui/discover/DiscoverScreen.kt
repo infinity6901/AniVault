@@ -186,6 +186,7 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
     var showFilters by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
+    val sortedItems = remember(ui.items, ui.sort) { ui.sort.apply(ui.items) }
 
     LaunchedEffect(ui.message) { ui.message?.let { snackbar.showSnackbar(it); viewModel.consumeMessage() } }
     val nearEnd by remember { derivedStateOf { val l = listState.layoutInfo; (l.visibleItemsInfo.lastOrNull()?.index ?: 0) >= l.totalItemsCount - 4 } }
@@ -242,7 +243,7 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
                     detail = st.failures.joinToString("\n") { "${it.sourceName}: ${it.kind.label}" }
                 )
                 DiscoverStatus.Content -> LazyColumn(state = listState, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(remember(ui.items, ui.sort) { ui.sort.apply(ui.items) }, key = { it.canonicalId }) { a -> ResultRow(a, a.canonicalId in ui.inLibrary) { detail = a } }
+                    items(sortedItems, key = { it.canonicalId }) { a -> ResultRow(a, a.canonicalId in ui.inLibrary) { detail = a } }
                     if (ui.loadingMore) item { LoadingBox() }
                 }
             }
