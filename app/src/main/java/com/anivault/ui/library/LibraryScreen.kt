@@ -63,6 +63,7 @@ data class LibraryUi(
 class LibraryViewModel @Inject constructor(
     private val repo: LibraryRepository,
     private val prefs: AppPrefs,
+    private val mover: VaultMover,
     saved: SavedStateHandle
 ) : ViewModel() {
     private val query = MutableStateFlow(
@@ -98,6 +99,10 @@ class LibraryViewModel @Inject constructor(
         val ids = selected.value.toList()
         viewModelScope.launch { undo.value = repo.delete(ids); clearSelection() }
     }
+    fun moveSelectedToVault() {
+        val ids = selected.value.toList()
+        viewModelScope.launch { mover.toVault(ids); clearSelection() }
+    }
     fun undoDelete() { val rows = undo.value ?: return; undo.value = null; viewModelScope.launch { repo.restore(rows) } }
     fun dismissUndo() { undo.value = null }
 }
@@ -109,6 +114,7 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
     var showFilters by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var statusMenu by remember { mutableStateOf(false) }
+    var confirmMove by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
 
@@ -135,6 +141,7 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
                                 WatchStatus.values().forEach { s -> DropdownMenuItem({ Text(s.label) }, onClick = { statusMenu = false; viewModel.setStatus(s) }) }
                             }
                         }
+                        IconButton(onClick = { confirmMove = true }) { Icon(Icons.Default.Lock, "Move selected to H-Vault") }
                         IconButton(onClick = { if (viewModel.confirmDelete) confirmDelete = true else viewModel.deleteSelected() }) {
                             Icon(Icons.Default.Delete, "Delete selected", tint = MaterialTheme.colorScheme.error)
                         }
@@ -207,6 +214,11 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
         }
     }
 
+    if (confirmMove) ConfirmDialog(
+        "Move ${ui.selected.size} ${if (ui.selected.size == 1) "title" else "titles"} to H-Vault?",
+        "They leave this library and appear in H-Vault behind your lock. You can move them back from H-Vault at any time.", "Move",
+        onConfirm = { confirmMove = false; viewModel.moveSelectedToVault() }, onDismiss = { confirmMove = false }
+    )
     if (confirmDelete) ConfirmDialog(
         "Delete ${ui.selected.size} ${if (ui.selected.size == 1) "title" else "titles"}?",
         "They will be removed from your library. You can undo right after.", "Delete",

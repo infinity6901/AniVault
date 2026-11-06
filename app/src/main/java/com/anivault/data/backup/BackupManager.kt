@@ -31,10 +31,11 @@ class BackupManager @Inject constructor(
     @Volatile private var snapshot: Snapshot? = null
     val canUndoRestore: Boolean get() = snapshot != null
 
-    suspend fun export(uri: Uri, password: CharArray, includeHVault: Boolean, includeSettings: Boolean, includeSecrets: Boolean = false) = withContext(Dispatchers.IO) {
+    suspend fun export(uri: Uri, password: CharArray, includeHVault: Boolean, includeSettings: Boolean, includeSecrets: Boolean = false, includeLibrary: Boolean = true) = withContext(Dispatchers.IO) {
         val payload = BackupPayload(
             appVersion = BuildConfig.VERSION_NAME,
-            anime = animeDao.getAll().map { it.copy(pendingSync = false) },
+            anime = if (includeLibrary) animeDao.getAll().map { it.copy(pendingSync = false) } else emptyList(),
+            libraryExcluded = !includeLibrary,
             hvault = if (includeHVault) vaultDao.getAll() else null,
             settings = if (includeSettings) readSettings() else null,
             secrets = if (includeSecrets) accounts.exportCredentials() else null
@@ -57,8 +58,9 @@ class BackupManager @Inject constructor(
      * Applies [payload] inside one database transaction: if anything fails the library is exactly as it was.
      * H-Vault rows are only touched when [includeHVault] is true AND the backup contains them.
      */
-    suspend fun restore(payload: BackupPayload, mode: RestoreMode, includeHVault: Boolean, includeSettings: Boolean, includeSecrets: Boolean = false) =
+    suspend fun restore(payload: BackupPayload, mode: RestoreMode, includeHVault: Boolean, includeSettings: Boolean, includeSecrets: Boolean = false, includeLibrary: Boolean = true) =
         withContext(Dispatchers.IO) {
+            val touchLibrary = includeLibrary && !payload.libraryExcluded
             val before = Snapshot(
                 animeDao.getAll(),
                 if (includeHVault && payload.hvault != null) vaultDao.getAll() else null,
@@ -68,12 +70,11 @@ class BackupManager @Inject constructor(
             db.withTransaction {
                 when (mode) {
                     RestoreMode.REPLACE -> {
-                        animeDao.deleteAll()
-                        animeDao.upsertAll(payload.anime)
+                        if (touchLibrary) { animeDao.deleteAll(); animeDao.upsertAll(payload.anime) }
                         if (before.hvault != null) { vaultDao.deleteAll(); vaultDao.upsertAll(payload.hvault!!) }
                     }
                     RestoreMode.MERGE -> {
-                        animeDao.upsertAll(BackupPlanner.mergeAnime(payload, before.anime))
+                        if (touchLibrary) animeDao.upsertAll(BackupPlanner.mergeAnime(payload, before.anime))
                         if (before.hvault != null) vaultDao.upsertAll(BackupPlanner.mergeVault(payload, before.hvault))
                     }
                 }

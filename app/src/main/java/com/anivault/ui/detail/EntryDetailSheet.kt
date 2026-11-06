@@ -5,6 +5,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -31,13 +32,15 @@ import javax.inject.Inject
 @HiltViewModel
 class EntryDetailViewModel @Inject constructor(
     private val repo: LibraryRepository,
-    private val prefs: AppPrefs
+    private val prefs: AppPrefs,
+    private val mover: com.anivault.data.library.VaultMover
 ) : ViewModel() {
     val showSynopsis: Boolean get() = prefs.showSynopsis
     val confirmDelete: Boolean get() = prefs.confirmDelete
     val autoComplete: Boolean get() = prefs.autoCompleteOnLast
     suspend fun load(id: String): AnimeEntry? = repo.get(id)
     fun save(e: AnimeEntry, done: () -> Unit) { viewModelScope.launch { repo.update(e); done() } }
+    fun moveToVault(id: String, done: () -> Unit) { viewModelScope.launch { mover.toVault(listOf(id)); done() } }
     fun delete(id: String, done: () -> Unit) { viewModelScope.launch { repo.delete(listOf(id)); done() } }
 }
 
@@ -49,6 +52,7 @@ fun EntryDetailSheet(id: String, onDismiss: () -> Unit, vm: EntryDetailViewModel
     var loaded by remember(id) { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
+    var confirmMove by remember { mutableStateOf(false) }
     LaunchedEffect(id) { original = vm.load(id); draft = original; loaded = true }
 
     val dirty = draft != original
@@ -93,12 +97,16 @@ fun EntryDetailSheet(id: String, onDismiss: () -> Unit, vm: EntryDetailViewModel
             OutlinedTextField(e.notes, { draft = e.copy(notes = it) }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
             if (e.genres.isNotEmpty()) Text(e.genres.joinToString(" · "), fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
             if (vm.showSynopsis && e.synopsis.isNotBlank()) Text(e.synopsis, fontSize = 14.sp)
+            TextButton(onClick = { confirmMove = true }, Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Lock, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Move to H-Vault")
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { if (vm.confirmDelete) confirmDelete = true else vm.delete(e.id, onDismiss) }, Modifier.weight(1f), colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Remove") }
                 Button(onClick = { vm.save(e, onDismiss) }, Modifier.weight(1f), enabled = dirty) { Text("Save") }
             }
         }
     }
+    if (confirmMove) ConfirmDialog("Move to H-Vault?", "This title leaves your library and appears in H-Vault behind your lock. Unsaved edits here are not kept.", "Move", { confirmMove = false; vm.moveToVault(id, onDismiss) }, { confirmMove = false })
     if (confirmDelete) ConfirmDialog("Remove this title?", "It will be deleted from your library.", "Remove", { confirmDelete = false; vm.delete(id, onDismiss) }, { confirmDelete = false }, destructive = true)
     if (confirmDiscard) ConfirmDialog("Discard changes?", "Your edits have not been saved.", "Discard", { confirmDiscard = false; onDismiss() }, { confirmDiscard = false }, destructive = true)
 }

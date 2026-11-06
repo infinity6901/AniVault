@@ -119,7 +119,7 @@ class HentaiFallbackRepository @Inject constructor(
     }
 
     suspend fun updateEntry(entry: HVaultEntry) = withContext(Dispatchers.IO) {
-        hVaultDao.upsert(entry.copy(updatedAt = System.currentTimeMillis()))
+        hVaultDao.upsert(com.anivault.data.library.VaultRules.normalize(entry).copy(updatedAt = System.currentTimeMillis()))
     }
 
     suspend fun deleteById(id: String) = withContext(Dispatchers.IO) {

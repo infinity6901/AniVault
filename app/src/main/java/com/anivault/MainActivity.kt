@@ -68,9 +68,14 @@ class MainActivity : FragmentActivity() {
         handleIntent(intent)
         setContent {
             var theme by remember { mutableStateOf(prefs.theme) }
-            var dynamic by remember { mutableStateOf(prefs.dynamicColor) }
-            LaunchedEffect(Unit) { prefs.changes.collect { theme = prefs.theme; dynamic = prefs.dynamicColor } }
-            AniVaultTheme(theme = theme, dynamicColor = dynamic) { AppRoot() }
+            var palette by remember { mutableStateOf(prefs.palette) }
+            // Own listener (strongly held for the lifetime of the composition) so a change always reaches the theme.
+            DisposableEffect(Unit) {
+                val l = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> theme = prefs.theme; palette = prefs.palette }
+                prefs.sp.registerOnSharedPreferenceChangeListener(l)
+                onDispose { prefs.sp.unregisterOnSharedPreferenceChangeListener(l) }
+            }
+            AniVaultTheme(theme = theme, palette = com.anivault.ui.theme.Palette.parse(palette)) { AppRoot() }
         }
     }
 
