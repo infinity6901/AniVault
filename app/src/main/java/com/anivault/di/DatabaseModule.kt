@@ -52,7 +52,7 @@ object DatabaseModule {
         val factory: SupportSQLiteOpenHelper.Factory = SupportFactory(passphrase, null, false)
         return Room.databaseBuilder(ctx, AppDatabase::class.java, SECURE_DB)
             .openHelperFactory(factory)
-            .addMigrations(AppDatabase.MIGRATION_1_2)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
             .build()
     }
 

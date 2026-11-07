@@ -44,7 +44,11 @@ data class AnimeEntry(
     /** True when a local change has not yet been pushed to a connected account. */
     @ColumnInfo(defaultValue = "0") val pendingSync: Boolean = false,
     @ColumnInfo(defaultValue = "0") val remoteUpdatedAt: Long = 0L,
-    @ColumnInfo(defaultValue = "0") val providerScore: Float = 0f
+    @ColumnInfo(defaultValue = "0") val providerScore: Float = 0f,
+
+    // ── v3 ────────────────────────────────────────────────────────────────
+    /** The user's own labels (favourite, rewatch, …). Local only; included in backups. */
+    @ColumnInfo(defaultValue = "''") val tags: List<String> = emptyList()
 )
 
 /** Remote ids per service: keys "anilist", "mal", "kitsu", "kitsuEntry". Uses org.json (no reflection, R8-safe). */

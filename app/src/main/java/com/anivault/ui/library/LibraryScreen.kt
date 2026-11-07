@@ -86,7 +86,7 @@ class LibraryViewModel @Inject constructor(
     val confirmDelete: Boolean get() = prefs.confirmDelete
 
     fun setQuery(f: (LibraryQuery) -> LibraryQuery) { query.update(f); prefs.librarySort = query.value.sort.name }
-    fun clearFilters() = query.update { it.copy(format = null, year = null, genre = null, minRating = null, source = null) }
+    fun clearFilters() = query.update { it.copy(format = null, year = null, genre = null, tag = null, minRating = null, source = null) }
     fun toggleView() { grid.update { !it }; prefs.libraryView = if (grid.value) "grid" else "list" }
     fun toggleSelect(id: String) = selected.update { if (id in it) it - id else it + id }
     fun clearSelection() { selected.value = emptySet() }
@@ -277,6 +277,7 @@ private fun FilterSheet(ui: LibraryUi, vm: LibraryViewModel, onDismiss: () -> Un
             }
             ChipGroup("Format", ui.facets.formats.map { it to it }, ui.query.format) { v -> vm.setQuery { it.copy(format = v) } }
             ChipGroup("Year", ui.facets.years.map { it to it.toString() }, ui.query.year) { v -> vm.setQuery { it.copy(year = v) } }
+            if (ui.facets.tags.isNotEmpty()) ChipGroup("My tags", ui.facets.tags.map { it to it }, ui.query.tag) { v -> vm.setQuery { it.copy(tag = v) } }
             ChipGroup("Genre", ui.facets.genres.map { it to it }, ui.query.genre) { v -> vm.setQuery { it.copy(genre = v) } }
             ChipGroup("Source", ui.facets.sources.map { it to it }, ui.query.source) { v -> vm.setQuery { it.copy(source = v) } }
             ChipGroup("My score at least", listOf(5f, 6f, 7f, 8f, 9f).map { it to it.toInt().toString() }, ui.query.minRating) { v -> vm.setQuery { it.copy(minRating = v) } }

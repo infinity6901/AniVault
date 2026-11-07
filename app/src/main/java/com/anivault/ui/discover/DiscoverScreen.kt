@@ -299,6 +299,7 @@ fun CatalogSheet(a: NormalizedAnime, inLibrary: Boolean, onAdd: (WatchStatus?) -
             }
             if (a.genres.isNotEmpty()) Text(a.genres.joinToString(" · "), fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
             Text(a.synopsis.ifBlank { "No synopsis available." }, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+            if (a.remoteIds.isNotEmpty()) com.anivault.ui.detail.RelatedRow(a.remoteIds)
             if (inLibrary) {
                 AssistChip(onClick = {}, label = { Text("Already in your library") }, leadingIcon = { Icon(Icons.Default.Check, null) })
             } else {
