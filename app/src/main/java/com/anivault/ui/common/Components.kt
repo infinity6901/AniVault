@@ -48,7 +48,15 @@ fun StatusChip(status: WatchStatus, modifier: Modifier = Modifier) {
 @Composable
 fun Poster(url: String, modifier: Modifier = Modifier, shape: RoundedCornerShape = RoundedCornerShape(12.dp)) {
     Box(modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceVariant)) {
-        if (url.isNotBlank()) AsyncImage(model = url, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        if (url.isNotBlank()) {
+            // Prefer the larger CDN variant; if it is missing, fall back to the stored URL.
+            var useOriginal by androidx.compose.runtime.remember(url) { androidx.compose.runtime.mutableStateOf(false) }
+            val better = androidx.compose.runtime.remember(url) { CoverUrls.upgrade(url) }
+            AsyncImage(
+                model = if (useOriginal) url else better, contentDescription = null, contentScale = ContentScale.Crop,
+                onError = { if (!useOriginal && better != url) useOriginal = true }, modifier = Modifier.fillMaxSize()
+            )
+        }
     }
 }
 
@@ -167,4 +175,53 @@ fun formatDuration(minutes: Long): String = when {
     minutes < 60 -> "${minutes}m"
     minutes < 60 * 48 -> "${minutes / 60}h ${minutes % 60}m"
     else -> "${minutes / (60 * 24)}d ${(minutes / 60) % 24}h"
+}
+
+/** A slimmer search field (about 44dp instead of 56dp) so lists get more room. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun CompactSearch(
+    value: String, onChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier,
+    trailing: @Composable (() -> Unit)? = null
+) {
+    androidx.compose.foundation.text.BasicTextField(
+        value = value, onValueChange = onChange, singleLine = true,
+        textStyle = androidx.compose.ui.text.TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 15.sp),
+        cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+        modifier = modifier.fillMaxWidth().heightIn(min = 44.dp),
+        decorationBox = { inner ->
+            androidx.compose.foundation.layout.Row(
+                Modifier.fillMaxWidth().heightIn(min = 44.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f), androidx.compose.foundation.shape.RoundedCornerShape(22.dp))
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Icon(androidx.compose.material.icons.Icons.Default.Search, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(10.dp))
+                Box(Modifier.weight(1f)) {
+                    if (value.isEmpty()) Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
+                    inner()
+                }
+                if (value.isNotEmpty()) IconButton(onClick = { onChange("") }, Modifier.size(32.dp)) {
+                    Icon(androidx.compose.material.icons.Icons.Default.Clear, "Clear search", Modifier.size(18.dp))
+                }
+                trailing?.invoke()
+            }
+        }
+    )
+}
+
+/** Appears once the list is scrolled past a few rows; jumps back to the search and filters. */
+@Composable
+fun BoxScope.ScrollToTop(visible: Boolean, onClick: () -> Unit) {
+    androidx.compose.animation.AnimatedVisibility(visible, Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp)) {
+        SmallFloatingActionButton(onClick = onClick) { Icon(androidx.compose.material.icons.Icons.Default.KeyboardArrowUp, "Back to search and filters") }
+    }
+}
+
+/** Lets an item inside a padded lazy grid draw edge to edge (cancels the grid's 16dp side padding). */
+val fullBleed: androidx.compose.ui.layout.MeasureScope.(androidx.compose.ui.layout.Measurable, androidx.compose.ui.unit.Constraints) -> androidx.compose.ui.layout.MeasureResult = { m, c ->
+    val extra = 32.dp.roundToPx()
+    val pl = m.measure(c.copy(minWidth = c.maxWidth + extra, maxWidth = c.maxWidth + extra))
+    layout(c.maxWidth, pl.height) { pl.place(-16.dp.roundToPx(), 0) }
 }

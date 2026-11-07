@@ -10,6 +10,8 @@ import com.anivault.widget.WidgetRules
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import com.anivault.data.library.Franchise
+import com.anivault.ui.common.CoverUrls
 import org.junit.Test
 
 class NewFeatureTests {
@@ -61,5 +63,26 @@ class NewFeatureTests {
         val c = AnimeEntry(id = "c", status = WatchStatus.COMPLETED)
         assertEquals(listOf("a"), WidgetRules.candidates(listOf(a, b, c)).map { it.id })
         assertEquals(0, WidgetRules.wrap(2, 2)); assertEquals(1, WidgetRules.wrap(-1, 2)); assertEquals(0, WidgetRules.wrap(5, 0))
+    }
+
+    @Test fun franchiseKeysGroupSeasons() {
+        val k = Franchise.key("Frieren")
+        assertEquals(k, Franchise.key("Frieren Season 2"))
+        assertEquals(k, Franchise.key("Frieren: 2nd Season"))
+        assertEquals(k, Franchise.key("Frieren Part 2"))
+        assertTrue(Franchise.key("Mob Psycho 100") != Franchise.key("Mob Psycho"))
+        assertEquals("86", Franchise.key("86"))
+    }
+
+    @Test fun franchiseGroupsKeepOrder() {
+        val a = AnimeEntry(id = "1", title = "Show Season 2"); val b = AnimeEntry(id = "2", title = "Other"); val c = AnimeEntry(id = "3", title = "Show")
+        val g = Franchise.group(listOf(a, b, c))
+        assertEquals(2, g.size); assertEquals(listOf("1", "3"), g[0].members.map { it.id })
+    }
+
+    @Test fun coverUpgrades() {
+        assertEquals("https://s4.anilist.co/file/anilistcdn/media/anime/cover/extraLarge/x.jpg", CoverUrls.upgrade("https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/x.jpg"))
+        assertEquals("https://cdn.myanimelist.net/images/anime/1/2l.jpg", CoverUrls.upgrade("https://cdn.myanimelist.net/images/anime/1/2t.jpg"))
+        assertEquals("https://example.com/a.jpg", CoverUrls.upgrade("https://example.com/a.jpg"))
     }
 }

@@ -1,0 +1,16 @@
+# Hand-written baseline profile: the screens and data paths used on every launch.
+# H = hot, S = startup, P = post-startup.
+HSPLcom/anivault/AniVaultApp;->**(**)**
+HSPLcom/anivault/MainActivity;->**(**)**
+HSPLcom/anivault/core/**;->**(**)**
+HSPLcom/anivault/di/**;->**(**)**
+HSPLcom/anivault/data/local/**;->**(**)**
+HSPLcom/anivault/ui/theme/**;->**(**)**
+HSPLcom/anivault/ui/common/**;->**(**)**
+HSPLcom/anivault/ui/home/**;->**(**)**
+HSPLcom/anivault/ui/library/**;->**(**)**
+HSPLcom/anivault/data/library/**;->**(**)**
+PLcom/anivault/ui/discover/**;->**(**)**
+PLcom/anivault/ui/vault/**;->**(**)**
+PLcom/anivault/data/provider/**;->**(**)**
+Lcom/anivault/**;

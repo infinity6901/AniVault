@@ -6,6 +6,15 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.layout.layout
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import com.anivault.ui.common.CompactSearch
+import com.anivault.ui.common.ScrollToTop
+import com.anivault.ui.common.fullBleed
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -87,42 +96,51 @@ fun VaultLibraryTab(entries: List<HVaultEntry>, vm: VaultViewModel) {
                 IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "Delete selected", tint = MaterialTheme.colorScheme.error) }
             }
         }
-        OutlinedTextField(
-            value = text, onValueChange = { text = it }, placeholder = { Text("Search your vault") }, singleLine = true,
-            leadingIcon = { Icon(Icons.Default.Search, null) },
-            trailingIcon = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (text.isNotEmpty()) IconButton(onClick = { text = "" }) { Icon(Icons.Default.Clear, "Clear search") }
-                    IconButton(onClick = { grid = !grid }) { Icon(if (grid) Icons.Default.ViewList else Icons.Default.GridView, if (grid) "Switch to list" else "Switch to grid") }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+        val gridState = rememberLazyGridState()
+        val listState = rememberLazyListState()
+        val scope = rememberCoroutineScope()
+        val header: @Composable () -> Unit = {
+            Column {
+                CompactSearch(text, { text = it }, "Search your vault", Modifier.padding(horizontal = 16.dp, vertical = 6.dp), trailing = {
+                    IconButton(onClick = { grid = !grid }, Modifier.size(36.dp)) { Icon(if (grid) Icons.Default.ViewList else Icons.Default.GridView, if (grid) "Switch to list" else "Switch to grid", Modifier.size(20.dp)) }
                     Box {
-                        IconButton(onClick = { sortMenu = true }) { Icon(Icons.Default.Sort, "Sort") }
+                        IconButton(onClick = { sortMenu = true }, Modifier.size(36.dp)) { Icon(Icons.Default.Sort, "Sort", Modifier.size(20.dp)) }
                         DropdownMenu(sortMenu, { sortMenu = false }) {
                             VAULT_SORTS.forEach { s -> DropdownMenuItem({ Text(s.label, fontWeight = if (s == sort) FontWeight.Bold else FontWeight.Normal) }, onClick = { sortMenu = false; sort = s }) }
                         }
                     }
+                })
+                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item { FilterChip(status == null, { status = null }, { Text("All (${entries.size})", fontSize = 13.sp) }) }
+                    items(WatchStatus.values().toList()) { s ->
+                        FilterChip(status == s, { status = if (status == s) null else s }, { Text("${s.label} (${entries.count { it.status == s }})", fontSize = 13.sp) })
+                    }
                 }
-            },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), shape = RoundedCornerShape(14.dp)
-        )
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            item { FilterChip(status == null, { status = null }, { Text("All (${entries.size})") }) }
-            items(WatchStatus.values().toList()) { s ->
-                FilterChip(status == s, { status = if (status == s) null else s }, { Text("${s.label} (${entries.count { it.status == s }})") })
+                Spacer(Modifier.height(6.dp))
             }
         }
-        Spacer(Modifier.height(8.dp))
-        when {
-            entries.isEmpty() -> EmptyState("Nothing here yet", "Use Search to add entries, or move titles here from your library.", Icons.Default.Lock)
-            shown.isEmpty() -> EmptyState("No matches", "Nothing in your vault fits this search.", Icons.Default.SearchOff, action = "Clear filters", onAction = { text = ""; status = null })
-            grid -> LazyVerticalGrid(
-                GridCells.Adaptive(112.dp), contentPadding = PaddingValues(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(shown, key = { it.id }) { e -> VaultGridItem(e, e.id in sel, selecting, { if (selecting) toggle(e.id) else open = e.id }, { toggle(e.id) }) }
+        Column(Modifier.fillMaxSize()) {
+            val listing = entries.isNotEmpty() && shown.isNotEmpty()
+            if (!listing) header()
+            when {
+                entries.isEmpty() -> EmptyState("Nothing here yet", "Use Search to add entries, or move titles here from your library.", Icons.Default.Lock)
+                shown.isEmpty() -> EmptyState("No matches", "Nothing in your vault fits this search.", Icons.Default.SearchOff, action = "Clear filters", onAction = { text = ""; status = null })
+                grid -> LazyVerticalGrid(
+                    GridCells.Adaptive(112.dp), state = gridState, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    item(key = "header", span = { GridItemSpan(maxLineSpan) }) { Box(Modifier.layout(fullBleed)) { header() } }
+                    items(shown, key = { it.id }) { e -> VaultGridItem(e, e.id in sel, selecting, { if (selecting) toggle(e.id) else open = e.id }, { toggle(e.id) }) }
+                }
+                else -> LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item(key = "header") { header() }
+                    items(shown, key = { it.id }) { e -> Box(Modifier.padding(horizontal = 16.dp)) { VaultListRow(e, e.id in sel, selecting, { if (selecting) toggle(e.id) else open = e.id }, { toggle(e.id) }) } }
+                }
             }
-            else -> LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(shown, key = { it.id }) { e -> VaultListRow(e, e.id in sel, selecting, { if (selecting) toggle(e.id) else open = e.id }, { toggle(e.id) }) }
-            }
+        }
+        val past = if (grid) gridState.firstVisibleItemIndex > 6 else listState.firstVisibleItemIndex > 3
+        ScrollToTop(past && shown.isNotEmpty()) { scope.launch { if (grid) gridState.animateScrollToItem(0) else listState.animateScrollToItem(0) } }
         }
     }
 

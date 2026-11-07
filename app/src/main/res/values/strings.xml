@@ -20,4 +20,6 @@
     <string name="search_hint">Search…</string>
     <string name="pdf_export_title">AniVault Export</string>
     <string name="widget_description">Shows what you are watching with a one-tap +1 episode button.</string>
+    <string name="widget_airing_description">The next episodes airing for the shows you follow.</string>
+    <string name="widget_stats_description">Titles watching and completed, and total watch time.</string>
 </resources>

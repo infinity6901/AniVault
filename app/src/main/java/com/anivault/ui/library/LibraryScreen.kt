@@ -4,6 +4,11 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.layout.layout
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -107,7 +112,7 @@ class LibraryViewModel @Inject constructor(
     fun dismissUndo() { undo.value = null }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = hiltViewModel()) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
@@ -116,6 +121,8 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
     var statusMenu by remember { mutableStateOf(false) }
     var confirmMove by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
+    var grouped by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var openGroup by remember { mutableStateOf<com.anivault.data.library.Franchise.Group?>(null) }
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(ui.undo) {
@@ -174,22 +181,30 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
             }
         }
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
-            OutlinedTextField(
-                value = ui.query.text, onValueChange = { t -> viewModel.setQuery { it.copy(text = t) } },
-                placeholder = { Text("Search your library") }, singleLine = true,
-                leadingIcon = { Icon(Icons.Default.Search, null) },
-                trailingIcon = { if (ui.query.text.isNotEmpty()) IconButton(onClick = { viewModel.setQuery { it.copy(text = "") } }) { Icon(Icons.Default.Clear, "Clear search") } },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), shape = RoundedCornerShape(14.dp)
-            )
-            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item { FilterChip(ui.query.status == null, { viewModel.setQuery { it.copy(status = null) } }, { Text("All (${ui.all.size})") }) }
-                items(WatchStatus.values().toList()) { s ->
-                    val n = ui.all.count { it.status == s }
-                    FilterChip(ui.query.status == s, { viewModel.setQuery { it.copy(status = if (it.status == s) null else s) } }, { Text("${s.label} ($n)") })
+        Box(Modifier.padding(padding).fillMaxSize()) {
+        val gridState = rememberLazyGridState()
+        val listState = rememberLazyListState()
+        val scope = rememberCoroutineScope()
+        val rows = remember(ui.shown, grouped) {
+            if (grouped) com.anivault.data.library.Franchise.group(ui.shown) else ui.shown.map { com.anivault.data.library.Franchise.Group(it.id, listOf(it)) }
+        }
+        val header: @Composable () -> Unit = {
+            Column {
+                CompactSearch(ui.query.text, { t -> viewModel.setQuery { it.copy(text = t) } }, "Search your library", Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item { FilterChip(grouped, { grouped = !grouped }, { Text("Group seasons", fontSize = 13.sp) }) }
+                    item { FilterChip(ui.query.status == null, { viewModel.setQuery { it.copy(status = null) } }, { Text("All (${ui.all.size})", fontSize = 13.sp) }) }
+                    items(WatchStatus.values().toList()) { s ->
+                        val n = ui.all.count { it.status == s }
+                        FilterChip(ui.query.status == s, { viewModel.setQuery { it.copy(status = if (it.status == s) null else s) } }, { Text("${s.label} ($n)", fontSize = 13.sp) })
+                    }
                 }
+                Spacer(Modifier.height(6.dp))
             }
-            Spacer(Modifier.height(8.dp))
+        }
+        Column(Modifier.fillMaxSize()) {
+            val listing = ui.loaded && ui.all.isNotEmpty() && ui.shown.isNotEmpty()
+            if (!listing) header()
             when {
                 !ui.loaded -> LoadingBox()
                 ui.all.isEmpty() -> EmptyState("Your library is empty", "Add titles from Discover and they will appear here.", Icons.Default.VideoLibrary)
@@ -198,22 +213,44 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
                     action = "Clear filters", onAction = { viewModel.setQuery { LibraryQuery(sort = it.sort) } }
                 )
                 ui.grid -> LazyVerticalGrid(
-                    GridCells.Adaptive(112.dp), contentPadding = PaddingValues(16.dp),
+                    GridCells.Adaptive(112.dp), state = gridState, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(ui.shown, key = { it.id }) { e ->
-                        GridItem(e, e.id in ui.selected, ui.selecting, { if (ui.selecting) viewModel.toggleSelect(e.id) else onOpenEntry(e.id) }, { viewModel.toggleSelect(e.id) })
+                    // Search and filters are the first item, so they scroll away after the first rows.
+                    item(key = "header", span = { GridItemSpan(maxLineSpan) }) { Box(Modifier.layout(fullBleed)) { header() } }
+                    items(rows, key = { it.key }) { g ->
+                        val e = g.lead
+                        Box {
+                            GridItem(e, e.id in ui.selected, ui.selecting, { if (g.members.size > 1) openGroup = g else if (ui.selecting) viewModel.toggleSelect(e.id) else onOpenEntry(e.id) }, { if (g.members.size > 1) openGroup = g else viewModel.toggleSelect(e.id) })
+                            if (g.members.size > 1) Text("×${g.members.size}", Modifier.align(Alignment.TopEnd).padding(6.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 2.dp), color = MaterialTheme.colorScheme.onPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
-                else -> LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(ui.shown, key = { it.id }) { e ->
-                        ListItemRow(e, e.id in ui.selected, ui.selecting, { if (ui.selecting) viewModel.toggleSelect(e.id) else onOpenEntry(e.id) }, { viewModel.toggleSelect(e.id) })
+                else -> LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item(key = "header") { header() }
+                    items(rows, key = { it.key }) { g ->
+                        val e = g.lead
+                        Box(Modifier.padding(horizontal = 16.dp)) {
+                            ListItemRow(e, e.id in ui.selected, ui.selecting, { if (g.members.size > 1) openGroup = g else if (ui.selecting) viewModel.toggleSelect(e.id) else onOpenEntry(e.id) }, { if (g.members.size > 1) openGroup = g else viewModel.toggleSelect(e.id) })
+                            if (g.members.size > 1) Text("×${g.members.size} seasons", Modifier.align(Alignment.TopEnd).padding(6.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 2.dp), color = MaterialTheme.colorScheme.onPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
         }
+        val past = if (ui.grid) gridState.firstVisibleItemIndex > 6 else listState.firstVisibleItemIndex > 3
+        ScrollToTop(past && ui.shown.isNotEmpty()) { scope.launch { if (ui.grid) gridState.animateScrollToItem(0) else listState.animateScrollToItem(0) } }
+        }
     }
 
+    openGroup?.let { g ->
+        ModalBottomSheet(onDismissRequest = { openGroup = null }) {
+            Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(g.lead.title, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                g.members.sortedBy { it.year ?: 9999 }.forEach { m -> ListItemRow(m, false, false, { openGroup = null; onOpenEntry(m.id) }, { openGroup = null; onOpenEntry(m.id) }) }
+            }
+        }
+    }
     if (confirmMove) ConfirmDialog(
         "Move ${ui.selected.size} ${if (ui.selected.size == 1) "title" else "titles"} to H-Vault?",
         "They leave this library and appear in H-Vault behind your lock. You can move them back from H-Vault at any time.", "Move",

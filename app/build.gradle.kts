@@ -18,6 +18,8 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+        // The UI is English-only; dropping other library translations trims the APK.
+        resourceConfigurations += listOf("en")
 
         // Room schema export directory
         ksp {
@@ -129,6 +131,8 @@ dependencies {
 
     // ── Image loading ──────────────────────────────────────────────────────
     implementation(libs.coil.compose)
+    // Installs the bundled baseline profile (src/main/baseline-prof.txt) at first launch for faster startup.
+    implementation("androidx.profileinstaller:profileinstaller:1.3.1")
 
     // ── Biometrics ─────────────────────────────────────────────────────────
     implementation(libs.biometric)
