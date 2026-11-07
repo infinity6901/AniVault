@@ -54,7 +54,7 @@ class LegacyMigrator @Inject constructor(
         if (!legacyExists()) { _status.value = MigrationStatus.NotNeeded; return }
         _status.value = MigrationStatus.Running
         val legacy = Room.databaseBuilder(ctx, AppDatabase::class.java, DatabaseModule.LEGACY_DB)
-            .addMigrations(AppDatabase.MIGRATION_1_2)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
             .build()
         try {
             val anime = legacy.animeDao().getAll()

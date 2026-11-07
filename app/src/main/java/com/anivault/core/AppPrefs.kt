@@ -113,6 +113,10 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
     var notifReminders: Boolean
         get() = sp.getBoolean(K_NOTIF_REMINDERS, true)
         set(v) = putBool(K_NOTIF_REMINDERS, v)
+    /** Alerts when a new episode of a show you're watching has aired. */
+    var notifAiring: Boolean
+        get() = sp.getBoolean(K_NOTIF_AIRING, true)
+        set(v) = putBool(K_NOTIF_AIRING, v)
     var notifSync: Boolean
         get() = sp.getBoolean(K_NOTIF_SYNC, true)
         set(v) = putBool(K_NOTIF_SYNC, v)
@@ -149,6 +153,7 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         const val K_MARK_VAULT = "mark_vault_on_accounts"
         const val K_NOTIF = "notif_enabled"
         const val K_NOTIF_REMINDERS = "notif_reminders"
+        const val K_NOTIF_AIRING = "notif_airing"
         const val K_NOTIF_SYNC = "notif_sync"
         const val K_QUIET_START = "notif_quiet_start"
         const val K_QUIET_END = "notif_quiet_end"

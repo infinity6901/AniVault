@@ -6,6 +6,7 @@ import com.anivault.core.Sanitizer
 import com.anivault.data.local.dao.AnimeDao
 import com.anivault.data.library.VaultMapping
 import com.anivault.data.library.VaultRules
+import com.anivault.data.local.entity.AnimeEntry
 import com.anivault.data.local.entity.HVaultEntry
 import com.anivault.data.local.entity.RemoteIds
 import com.anivault.data.provider.TitleMatcher
@@ -33,7 +34,9 @@ data class SyncReport(
     val toVault: Int = 0,
     val deletedOnAccount: Int = 0,
     val vaultMode: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    /** Human-readable lines for the sync log (titles added, updated, sent, failed). */
+    val details: List<String> = emptyList()
 ) {
     val ok: Boolean get() = error == null
     fun summary(): String =
@@ -53,7 +56,8 @@ class SyncManager @Inject constructor(
     private val accounts: AccountManager,
     private val prefs: AppPrefs,
     private val diagnostics: DiagnosticsLog,
-    private val remoteOps: RemoteOps
+    private val remoteOps: RemoteOps,
+    private val syncLog: SyncLogStore
 ) {
     private val mutex = Mutex()
     private val _running = MutableStateFlow(false)
@@ -88,7 +92,7 @@ class SyncManager @Inject constructor(
     private class OpsOutcome(val view: Map<String, RemoteListEntry>, val dropped: Set<String>, val unmarking: Set<String>, val deleted: Int)
 
     /** Carries out queued deletes / H-Vault tags for [p]. A rate limit or sign-in problem aborts the sync (the rest stays queued). */
-    private suspend fun applyOps(p: AccountProvider, api: AccountApi, token: String, who: Identity, remoteAll: List<RemoteListEntry>): OpsOutcome {
+    private suspend fun applyOps(p: AccountProvider, api: AccountApi, token: String, who: Identity, remoteAll: List<RemoteListEntry>, log: MutableList<String> = ArrayList()): OpsOutcome {
         val view = LinkedHashMap<String, RemoteListEntry>().apply { remoteAll.forEach { put(it.remoteMediaId, it) } }
         val dropped = HashSet<String>()
         val unmarking = HashSet<String>()
@@ -98,17 +102,19 @@ class SyncManager @Inject constructor(
             try {
                 when (op.type) {
                     OpType.DELETE -> {
-                        if (r != null) { api.delete(token, who, op.mediaId, r.remoteEntryId); deleted++ }
+                        if (r != null) { api.delete(token, who, op.mediaId, r.remoteEntryId); deleted++; log += "✕ Removed \"${r.media.title}\" from ${p.label}" }
                         view.remove(op.mediaId)
                     }
                     OpType.MARK -> if (r != null) {
                         if (!VaultOwnership.hasMark(r.notes) || p == AccountProvider.ANILIST || p == AccountProvider.KITSU) {
                             api.mark(token, who, r, true)
+                            log += "# Tagged \"${r.media.title}\" as H-Vault on ${p.label}"
                             view[op.mediaId] = r.copy(notes = VaultOwnership.withMark(r.notes, true))
                         }
                     }
                     OpType.UNMARK -> if (r != null) {
                         api.mark(token, who, r, false)
+                        log += "# Cleared the H-Vault tag on \"${r.media.title}\""
                         view[op.mediaId] = r.copy(notes = VaultOwnership.withMark(r.notes, false))
                     }
                 }
@@ -117,6 +123,7 @@ class SyncManager @Inject constructor(
                 throw e
             } catch (e: ProviderException) {
                 if (e.kind == FailureKind.AUTH || e.kind == FailureKind.RATE_LIMITED) throw e
+                log += "✗ ${op.type.name.lowercase()} failed for title ${op.mediaId}: ${Sanitizer.clean(e.message)}"
                 if (op.type == OpType.DELETE) dropped += op.mediaId
                 if (op.type == OpType.UNMARK) unmarking += "${p.key}:${op.mediaId}"
             }
@@ -126,39 +133,19 @@ class SyncManager @Inject constructor(
 
     private suspend fun run(p: AccountProvider, vaultMode: Boolean): SyncReport {
         val t0 = System.currentTimeMillis()
+        val log = ArrayList<String>()
         return try {
             val report = accounts.withToken(p) { token, who ->
                 val api = accounts.api(p)
                 val fetched = api.fetchList(token, who)
-                val o = applyOps(p, api, token, who, fetched)
+                val o = applyOps(p, api, token, who, fetched, log)
                 val remoteAll = o.view.values.filter { it.remoteMediaId !in o.dropped }
 
                 // ── who owns each title? ──────────────────────────────────────────
                 val libraryAll = dao.getAll()
                 val vaultAll = vaultDao.getAll()
-                val links = remoteOps.links()
-                val owned = HashSet<String>()
-                vaultAll.forEach { v -> owned += VaultOwnership.keysOfVaultId(v.id); links[v.id]?.let { owned += VaultOwnership.keysOf(it) } }
-                val libraryKeys = libraryAll.flatMap { VaultOwnership.keysOf(it.remoteIds) }.toSet()
-                val vaultByTitle = vaultAll.groupBy { TitleMatcher.normalize(it.title) }.filterKeys { it.isNotEmpty() }
-
-                fun isVault(r: RemoteListEntry): Boolean {
-                    val k = "${p.key}:${r.remoteMediaId}"
-                    if (k in o.unmarking) return false
-                    if (r.media.adult || VaultOwnership.hasMark(r.notes) || k in owned) return true
-                    // Moved to H-Vault before every account link was recorded: recognise it by title and remember the link.
-                    if (k !in libraryKeys) {
-                        val v = vaultByTitle[TitleMatcher.normalize(r.media.title)]?.firstOrNull()
-                        if (v != null) {
-                            owned += k
-                            remoteOps.setLink(v.id, RemoteIds.merge(remoteOps.link(v.id), mapOf(p.key to r.remoteMediaId)))
-                            return true
-                        }
-                    }
-                    return false
-                }
-
-                val (vaultRemote, libRemote) = remoteAll.partition(::isVault)
+                val ownership = Ownership(p, libraryAll, vaultAll, o.unmarking, record = true)
+                val (vaultRemote, libRemote) = remoteAll.partition(ownership::isVault)
                 val toVault = routeToVault(p, vaultRemote)
                 val policy = ConflictPolicy.parse(prefs.conflictPolicy)
                 val key = p.key
@@ -191,10 +178,11 @@ class SyncManager @Inject constructor(
                         val extra = if (mark) PushExtra(notes = VaultOwnership.withMark(notesByMedia[mediaId]?.notes.orEmpty(), true), private = true) else PushExtra()
                         PushItem(e, extra)
                     }
+                    plan.pulls.forEach { log += "↓ Updated \"${it.updated.title}\" in H-Vault" }
                     for (out in api.pushMany(token, who, items)) {
-                        if (out.result != null) pushed++
-                        else if (out.error?.kind == FailureKind.RATE_LIMITED) limited = out.error
-                        else failed++
+                        if (out.result != null) { pushed++; log += "↑ Sent \"${out.item.entry.title}\"" }
+                        else if (out.error?.kind == FailureKind.RATE_LIMITED) { limited = out.error; log += "⏸ Rate limited at \"${out.item.entry.title}\"" }
+                        else { failed++; log += "✗ \"${out.item.entry.title}\": ${Sanitizer.clean(out.error?.message)}" }
                     }
                     if (limited == null) remoteOps.setVaultLastSync(key, t0)
                     report = SyncReport(p, 0, plan.pulls.size, pushed, failed, plan.conflicts, plan.skippedUnmatched, toVault, o.deleted, true)
@@ -203,16 +191,19 @@ class SyncManager @Inject constructor(
                     val plan = SyncPlanner.plan(p, libraryAll, libRemote, last, policy)
                     val incoming = plan.imports + plan.pulls.map { it.updated }
                     if (incoming.isNotEmpty()) dao.upsertAll(incoming)
+                    plan.imports.forEach { log += "+ Added \"${it.title}\"" }
+                    plan.pulls.forEach { log += "↓ Updated \"${it.updated.title}\" (${it.updated.watchedEpisodes}/${it.updated.totalEpisodes}, ${it.updated.status.label})" }
                     val byId = plan.pushes.associateBy { it.id }
                     for (out in api.pushMany(token, who, plan.pushes.map { PushItem(it) })) {
                         val entry = out.item.entry
                         if (out.result != null) {
                             pushed++
+                            log += "↑ Sent \"${entry.title}\""
                             val ids = out.result.remoteEntryId?.let { mapOf("${key}Entry" to it) } ?: emptyMap()
                             // Keep updatedAt so the pushed row isn't mistaken for a new local edit.
                             dao.upsert((byId[entry.id] ?: entry).copy(remoteIds = RemoteIds.merge(entry.remoteIds, ids)))
-                        } else if (out.error?.kind == FailureKind.RATE_LIMITED) limited = out.error
-                        else failed++
+                        } else if (out.error?.kind == FailureKind.RATE_LIMITED) { limited = out.error; log += "⏸ Rate limited at \"${entry.title}\"" }
+                        else { failed++; log += "✗ \"${entry.title}\": ${Sanitizer.clean(out.error?.message)}" }
                     }
                     report = SyncReport(p, plan.imports.size, plan.pulls.size, pushed, failed, plan.conflicts, plan.skippedUnmatched, toVault, o.deleted)
                 }
@@ -222,7 +213,9 @@ class SyncManager @Inject constructor(
             }
             if (!vaultMode) accounts.recordSync(p, t0)
             diagnostics.record(p.label, if (vaultMode) "vault sync" else "sync", true, System.currentTimeMillis() - t0)
-            report
+            val done = report.copy(details = log)
+            syncLog.add(SyncLogEntry(t0, p.label + if (vaultMode) " (H-Vault)" else "", true, done.summary(), log))
+            done
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -235,9 +228,96 @@ class SyncManager @Inject constructor(
                 else -> Sanitizer.clean(e.message).ifBlank { "Sync failed" }
             }
             accounts.recordError(p, msg)
+            log += "✗ $msg"
+            syncLog.add(SyncLogEntry(t0, p.label + if (vaultMode) " (H-Vault)" else "", false, "${p.label}: $msg", log))
             diagnostics.record(p.label, if (vaultMode) "vault sync" else "sync", false, System.currentTimeMillis() - t0, e.message)
             SyncReport(p, error = msg, vaultMode = vaultMode)
         }
+    }
+
+    /** Decides, for each entry on an account, whether it belongs in H-Vault. [record] remembers links found by title. */
+    private inner class Ownership(
+        private val p: AccountProvider,
+        libraryAll: List<AnimeEntry>,
+        vaultAll: List<HVaultEntry>,
+        private val unmarking: Set<String>,
+        private val record: Boolean
+    ) {
+        private val owned = HashSet<String>()
+        private val libraryKeys = libraryAll.flatMap { VaultOwnership.keysOf(it.remoteIds) }.toSet()
+        private val vaultByTitle = vaultAll.groupBy { TitleMatcher.normalize(it.title) }.filterKeys { it.isNotEmpty() }
+
+        init {
+            val links = remoteOps.links()
+            vaultAll.forEach { v -> owned += VaultOwnership.keysOfVaultId(v.id); links[v.id]?.let { owned += VaultOwnership.keysOf(it) } }
+        }
+
+        fun isVault(r: RemoteListEntry): Boolean {
+            val k = "${p.key}:${r.remoteMediaId}"
+            if (k in unmarking) return false
+            if (r.media.adult || VaultOwnership.hasMark(r.notes) || k in owned) return true
+            // Moved to H-Vault before every account link was recorded: recognise it by title and remember the link.
+            if (k !in libraryKeys) {
+                val v = vaultByTitle[TitleMatcher.normalize(r.media.title)]?.firstOrNull()
+                if (v != null) {
+                    owned += k
+                    if (record) remoteOps.setLink(v.id, RemoteIds.merge(remoteOps.link(v.id), mapOf(p.key to r.remoteMediaId)))
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    /** What [syncAll] would do right now, without changing anything here or on the accounts. */
+    suspend fun preview(): List<SyncReport> = mutex.withLock {
+        _running.value = true
+        try {
+            accounts.connectedProviders().map { p ->
+                try {
+                    accounts.withToken(p) { token, who ->
+                        val api = accounts.api(p)
+                        val remoteAll = api.fetchList(token, who)
+                        val byMedia = remoteAll.associateBy { it.remoteMediaId }
+                        val lines = ArrayList<String>()
+                        val ops = remoteOps.pending(p.key)
+                        var dels = 0
+                        ops.forEach { op ->
+                            val title = byMedia[op.mediaId]?.media?.title ?: "title ${op.mediaId}"
+                            when (op.type) {
+                                OpType.DELETE -> { dels++; lines += "✕ Remove \"$title\" from ${p.label}" }
+                                OpType.MARK -> lines += "# Tag \"$title\" as H-Vault on ${p.label}"
+                                OpType.UNMARK -> lines += "# Remove the H-Vault tag from \"$title\""
+                            }
+                        }
+                        val dropped = ops.filter { it.type == OpType.DELETE }.map { it.mediaId }.toSet()
+                        val unmarking = ops.filter { it.type == OpType.UNMARK }.map { "${p.key}:${it.mediaId}" }.toSet()
+                        val libraryAll = dao.getAll()
+                        val vaultAll = vaultDao.getAll()
+                        val ownership = Ownership(p, libraryAll, vaultAll, unmarking, record = false)
+                        val (vaultRemote, libRemote) = remoteAll.filter { it.remoteMediaId !in dropped }.partition(ownership::isVault)
+                        val known = HashSet<String>()
+                        val links = remoteOps.links()
+                        vaultAll.forEach { v -> known += VaultOwnership.keysOfVaultId(v.id); links[v.id]?.let { known += VaultOwnership.keysOf(it) } }
+                        val newVault = vaultRemote.filter { "${p.key}:${it.remoteMediaId}" !in known }
+                        newVault.forEach { lines += "🔒 \"${it.media.title}\" goes to H-Vault" }
+                        val plan = SyncPlanner.plan(p, libraryAll, libRemote, accounts.lastSyncAt(p), ConflictPolicy.parse(prefs.conflictPolicy))
+                        val localById = libraryAll.associateBy { it.id }
+                        plan.imports.forEach { lines += "+ Add \"${it.title}\" (${it.watchedEpisodes}/${it.totalEpisodes})" }
+                        plan.pulls.forEach { lines += "↓ Update \"${it.updated.title}\"${localById[it.updated.id]?.let { l -> ": ${l.watchedEpisodes} → ${it.updated.watchedEpisodes} eps, ${l.status.label} → ${it.updated.status.label}" } ?: ""}" }
+                        plan.pushes.forEach { lines += "↑ Send \"${it.title}\" (${it.watchedEpisodes}/${it.totalEpisodes}, ${it.status.label})" }
+                        if (plan.conflicts > 0) lines += "⚠ ${plan.conflicts} conflict(s) resolved by your policy"
+                        if (plan.skippedUnmatched > 0) lines += "… ${plan.skippedUnmatched} local title(s) have no match on ${p.label} and are skipped"
+                        if (lines.isEmpty()) lines += "Nothing to do. Everything matches."
+                        SyncReport(p, plan.imports.size, plan.pulls.size, plan.pushes.size, 0, plan.conflicts, plan.skippedUnmatched, newVault.size, dels, details = lines)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    SyncReport(p, error = if ((e as? ProviderException)?.kind == FailureKind.AUTH) "Sign in again to continue." else Sanitizer.clean(e.message).ifBlank { "Preview failed" })
+                }
+            }
+        } finally { _running.value = false }
     }
 
     /** Saves vault-owned remote entries to H-Vault (new ones only, so vault edits are never overwritten) and removes any library copy. */

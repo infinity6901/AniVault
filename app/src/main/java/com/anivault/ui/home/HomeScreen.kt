@@ -60,8 +60,20 @@ class HomeViewModel @Inject constructor(
     private val library: LibraryRepository,
     private val providers: ProviderRepository,
     private val prefs: AppPrefs,
-    private val backfill: com.anivault.data.library.DurationBackfill
+    private val backfill: com.anivault.data.library.DurationBackfill,
+    private val airingRepo: com.anivault.data.provider.AiringRepository
 ) : ViewModel() {
+    private val _airing = MutableStateFlow<List<com.anivault.data.provider.AiringItem>>(emptyList())
+    val airing: StateFlow<List<com.anivault.data.provider.AiringItem>> = _airing.asStateFlow()
+
+    /** Shows the cached schedule at once, then refreshes it (at most every few hours) and shows that. */
+    private fun loadAiring() {
+        viewModelScope.launch {
+            _airing.value = airingRepo.items()
+            if (runCatching { airingRepo.refresh() }.getOrDefault(false)) _airing.value = airingRepo.items()
+        }
+    }
+
     private val banner = MutableStateFlow<List<NormalizedAnime>>(emptyList())
     private val bannerLoading = MutableStateFlow(true)
 
@@ -71,7 +83,7 @@ class HomeViewModel @Inject constructor(
     ) { total, planned, cont, b, loading -> HomeState(total, planned, cont, b, loading, prefs.showPlusOne) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeState())
 
-    init { loadBanner(); backfill.run() }
+    init { loadBanner(); backfill.run(); loadAiring() }
 
     /** The banner is whatever the providers say is trending – never hard-coded art. */
     fun loadBanner() {
@@ -96,6 +108,7 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val s by viewModel.state.collectAsStateWithLifecycle()
+    val airing by viewModel.airing.collectAsStateWithLifecycle()
     LazyColumn(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item { Text("AniVault", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground) }
         item { BannerPager(s.banners, s.bannerLoading, onOpen = onOpenCatalog, onRetry = viewModel::loadBanner) }
@@ -123,6 +136,16 @@ fun HomeScreen(
             LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(s.continueWatching, key = { it.id }) { e ->
                     ContinueCard(e, s.showPlusOne, onClick = { onOpenEntry(e.id) }, onPlusOne = { viewModel.plusOne(e.id) })
+                }
+            }
+        }
+        val now = System.currentTimeMillis()
+        val week = airing.filter { it.airingAt in (now - 6 * 3_600_000L)..(now + 7 * 86_400_000L) }
+        if (week.isNotEmpty()) {
+            item { SectionHeader("This week") }
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    week.take(8).forEach { a -> AiringRow(a, now, onClick = { onOpenEntry(a.libraryId) }) }
                 }
             }
         }
@@ -219,3 +242,22 @@ private fun ContinueCard(e: AnimeEntry, showPlusOne: Boolean, onClick: () -> Uni
 /** "Ep 3 / 12", or "Ep 3" when the total is unknown (never a misleading percentage). */
 fun progressLabel(e: AnimeEntry): String =
     if (e.totalEpisodes > 0) "Ep ${e.watchedEpisodes} / ${e.totalEpisodes}" else "Ep ${e.watchedEpisodes} · total unknown"
+
+/** One upcoming episode: cover, title, which episode and when it airs. */
+@Composable
+private fun AiringRow(a: com.anivault.data.provider.AiringItem, now: Long, onClick: () -> Unit) {
+    val day = java.text.SimpleDateFormat("EEE h:mm a", java.util.Locale.getDefault()).format(java.util.Date(a.airingAt))
+    val behind = a.episode - 1 - a.watched
+    AniCard(Modifier.fillMaxWidth().semantics { contentDescription = "${a.title}, episode ${a.episode}, $day" }, onClick = onClick) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Poster(a.coverUrl, Modifier.width(44.dp).height(62.dp), RoundedCornerShape(8.dp))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(a.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                Text("Episode ${a.episode} · $day", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
+                if (behind > 0) Text("$behind episode${if (behind == 1) "" else "s"} behind", fontSize = 11.sp, color = MaterialTheme.colorScheme.dim)
+            }
+            Text(com.anivault.data.provider.AiringFormat.relative(a.airingAt, now), fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}

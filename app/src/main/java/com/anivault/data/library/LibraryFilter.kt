@@ -20,13 +20,14 @@ data class LibraryQuery(
     val format: String? = null,
     val year: Int? = null,
     val genre: String? = null,
+    val tag: String? = null,
     /** Minimum PERSONAL rating (0–10). */
     val minRating: Float? = null,
     val source: String? = null,
     val sort: LibrarySort = LibrarySort.UPDATED
 ) {
     val activeFilterCount: Int
-        get() = listOfNotNull(format, year, genre, minRating, source).size
+        get() = listOfNotNull(format, year, genre, tag, minRating, source).size
 }
 
 /** Pure filtering/sorting for the Library screen (unit-tested). */
@@ -38,9 +39,10 @@ object LibraryFilter {
                 (q.format.isNullOrBlank() || e.format.equals(q.format, true)) &&
                 (q.year == null || e.year == q.year) &&
                 (q.genre.isNullOrBlank() || e.genres.any { it.equals(q.genre, true) }) &&
+                (q.tag.isNullOrBlank() || e.tags.any { it.equals(q.tag, true) }) &&
                 (q.minRating == null || e.rating >= q.minRating) &&
                 (q.source.isNullOrBlank() || e.sourceName.equals(q.source, true)) &&
-                (needle.isEmpty() || e.title.lowercase().contains(needle) || e.altTitles.any { it.lowercase().contains(needle) })
+                (needle.isEmpty() || e.title.lowercase().contains(needle) || e.altTitles.any { it.lowercase().contains(needle) } || e.tags.any { it.lowercase().contains(needle) })
         }
         return when (q.sort) {
             LibrarySort.UPDATED -> filtered.sortedByDescending { it.updatedAt }
@@ -57,12 +59,13 @@ object LibraryFilter {
         if (e.totalEpisodes > 0) (e.watchedEpisodes.toFloat() / e.totalEpisodes).coerceIn(0f, 1f)
         else (e.watchedEpisodes / 1000f).coerceIn(0f, 0.99f)
 
-    data class Facets(val formats: List<String>, val years: List<Int>, val genres: List<String>, val sources: List<String>)
+    data class Facets(val formats: List<String>, val years: List<Int>, val genres: List<String>, val sources: List<String>, val tags: List<String> = emptyList())
 
     fun facets(all: List<AnimeEntry>) = Facets(
         formats = all.map { it.format }.filter { it.isNotBlank() }.distinct().sorted(),
         years = all.mapNotNull { it.year }.distinct().sortedDescending(),
         genres = all.flatMap { it.genres }.filter { it.isNotBlank() }.distinct().sorted(),
-        sources = all.map { it.sourceName }.filter { it.isNotBlank() }.distinct().sorted()
+        sources = all.map { it.sourceName }.filter { it.isNotBlank() }.distinct().sorted(),
+        tags = all.flatMap { it.tags }.filter { it.isNotBlank() }.distinct().sortedBy { it.lowercase() }
     )
 }
