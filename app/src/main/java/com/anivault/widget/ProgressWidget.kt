@@ -15,6 +15,7 @@ import com.anivault.data.library.ProgressRules
 import com.anivault.data.local.dao.AnimeDao
 import com.anivault.data.local.entity.AnimeEntry
 import com.anivault.data.local.model.WatchStatus
+import androidx.core.graphics.drawable.toBitmap
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -120,7 +121,7 @@ object WidgetCovers {
         for (u in listOf(com.anivault.ui.common.CoverUrls.upgrade(url), url).distinct()) {
             val req = coil.request.ImageRequest.Builder(ctx).data(u).size(360, 520).allowHardware(false).build()
             val d = (loader.execute(req) as? coil.request.SuccessResult)?.drawable ?: continue
-            return roundLeft(androidx.core.graphics.drawable.toBitmap(d), 20f * ctx.resources.displayMetrics.density)
+            return roundLeft(d.toBitmap(), 20f * ctx.resources.displayMetrics.density)
         }
         return null
     }
