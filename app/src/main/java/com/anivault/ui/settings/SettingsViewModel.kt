@@ -34,6 +34,8 @@ class SettingsViewModel @Inject constructor(
     val prefs: AppPrefs,
     val accounts: AccountManager,
     private val sync: SyncManager,
+    private val syncLog: com.anivault.data.sync.SyncLogStore,
+    private val malImporter: com.anivault.data.library.MalImporter,
     private val backup: BackupManager,
     private val animeDao: AnimeDao,
     private val hvaultDao: com.anivault.data.local.dao.HVaultDao,
@@ -69,6 +71,25 @@ class SettingsViewModel @Inject constructor(
             say(if (reports.isEmpty()) "No connected accounts to sync." else reports.joinToString("\n") { it.summary() })
         }
     }
+    /** Result of "Preview changes": a title plus the lines to show; null when closed. */
+    private val _syncText = MutableStateFlow<Pair<String, List<String>>?>(null)
+    val syncText: StateFlow<Pair<String, List<String>>?> = _syncText.asStateFlow()
+    fun closeSyncText() { _syncText.value = null }
+    fun previewSync() {
+        viewModelScope.launch {
+            _syncText.value = "Checking…" to listOf("Comparing your library with your accounts. Nothing is changed.")
+            val reports = sync.preview()
+            _syncText.value = "Sync preview" to if (reports.isEmpty()) listOf("No connected accounts.")
+                else reports.flatMap { r -> listOf("— ${r.provider.label} —") + (r.error?.let { listOf("✗ $it") } ?: r.details) }
+        }
+    }
+    fun showSyncLog() {
+        val runs = syncLog.recent()
+        val fmt = java.text.SimpleDateFormat("d MMM, h:mm a", java.util.Locale.getDefault())
+        _syncText.value = "Sync log" to if (runs.isEmpty()) listOf("No syncs yet.")
+            else runs.flatMap { r -> listOf("— ${fmt.format(java.util.Date(r.time))} · ${r.label} · ${if (r.ok) "ok" else "failed"} —", r.summary) + r.lines }
+    }
+    fun clearSyncLog() { syncLog.clear(); _syncText.value = null }
     fun setConflictPolicy(p: ConflictPolicy) { prefs.conflictPolicy = p.name }
 
     // ── Backup ─────────────────────────────────────────────────────────────
@@ -112,6 +133,22 @@ class SettingsViewModel @Inject constructor(
     fun undoRestore() = launchBusy {
         say(if (backup.undoRestore()) "Restore undone." else "Nothing to undo.")
         _canUndo.value = backup.canUndoRestore
+    }
+
+    fun refreshCovers() = launchBusy {
+        val urls = withContext(Dispatchers.IO) { animeDao.getAll().map { it.imageUrl } + hvaultDao.getAll().map { it.imageUrl } }
+        com.anivault.ui.common.CoverCache.refresh(ctx, urls)
+        say("Cleared cached covers. Downloading ${urls.filter { it.isNotBlank() }.distinct().size} again in the background.")
+    }
+
+    fun importMal(uri: Uri) = launchBusy {
+        val r = withContext(Dispatchers.IO) {
+            ctx.contentResolver.openInputStream(uri)?.use { malImporter.import(it) }
+        }
+        say(when {
+            r == null || r.failed -> "Couldn't read that file. Use the .xml or .xml.gz export from myanimelist.net/panel.php?go=export."
+            else -> "Imported ${r.added} titles" + (if (r.toVault > 0) ", ${r.toVault} adult to H-Vault" else "") + ", skipped ${r.skipped} already here."
+        })
     }
 
     fun exportList(kind: String) = launchBusy {

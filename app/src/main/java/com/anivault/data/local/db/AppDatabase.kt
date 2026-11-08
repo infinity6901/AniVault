@@ -12,7 +12,7 @@ import com.anivault.data.local.entity.HVaultEntry
 
 @Database(
     entities  = [AnimeEntry::class, HVaultEntry::class],
-    version   = 2,
+    version   = 3,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -21,6 +21,13 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun hVaultDao(): HVaultDao
 
     companion object {
+        /** v2 → v3: the user's own tags. Purely additive. */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE anime_entries ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         /** v1 → v2: provider metadata, dates, sync bookkeeping. Purely additive. */
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {

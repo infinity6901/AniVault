@@ -90,6 +90,7 @@ class MainActivity : FragmentActivity() {
     override fun onStop() {
         super.onStop()
         if (!isChangingConfigurations) vaultSession.onBackgrounded()
+        com.anivault.widget.WidgetUpdater.refreshAll(this)
     }
 
     /** OAuth redirect (anivault://auth/<provider>). */

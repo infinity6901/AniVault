@@ -13,9 +13,21 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltAndroidApp
-class AniVaultApp : Application() {
+class AniVaultApp : Application(), coil.ImageLoaderFactory {
     @Inject lateinit var migrator: LegacyMigrator
     @Inject lateinit var prefs: AppPrefs
+
+    /** Covers are cached on disk (512 MB) and in memory, so lists open instantly and work offline once seen. */
+    override fun newImageLoader(): coil.ImageLoader = coil.ImageLoader.Builder(this)
+        .memoryCache { coil.memory.MemoryCache.Builder(this).maxSizePercent(0.30).strongReferencesEnabled(true).build() }
+        .diskCache { coil.disk.DiskCache.Builder().directory(cacheDir.resolve("covers")).maxSizeBytes(512L * 1024 * 1024).build() }
+        // Cover CDNs often send short cache lifetimes; the artwork itself rarely changes, so keep it.
+        .respectCacheHeaders(false)
+        // Reuse any already-decoded bitmap that is big enough, instead of re-decoding for every slightly different size.
+        .precision(coil.size.Precision.INEXACT)
+        .allowRgb565(true)
+        .crossfade(false)
+        .build()
 
     override fun onCreate() {
         super.onCreate()

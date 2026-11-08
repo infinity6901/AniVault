@@ -27,6 +27,8 @@ import com.anivault.ui.common.*
 import com.anivault.ui.theme.dim
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import com.anivault.data.local.entity.RemoteIds
 import javax.inject.Inject
 
 @HiltViewModel
@@ -39,6 +41,7 @@ class EntryDetailViewModel @Inject constructor(
     val confirmDelete: Boolean get() = prefs.confirmDelete
     val autoComplete: Boolean get() = prefs.autoCompleteOnLast
     suspend fun load(id: String): AnimeEntry? = repo.get(id)
+    suspend fun allTags(): List<String> = repo.observeAll().first().flatMap { it.tags }.distinct().sortedBy { it.lowercase() }
     fun save(e: AnimeEntry, done: () -> Unit) { viewModelScope.launch { repo.update(e); done() } }
     fun moveToVault(id: String, done: () -> Unit) { viewModelScope.launch { mover.toVault(listOf(id)); done() } }
     fun delete(id: String, done: () -> Unit) { viewModelScope.launch { repo.delete(listOf(id)); done() } }
@@ -53,7 +56,8 @@ fun EntryDetailSheet(id: String, onDismiss: () -> Unit, vm: EntryDetailViewModel
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
     var confirmMove by remember { mutableStateOf(false) }
-    LaunchedEffect(id) { original = vm.load(id); draft = original; loaded = true }
+    var tagSuggestions by remember { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(id) { original = vm.load(id); draft = original; loaded = true; tagSuggestions = vm.allTags() }
 
     val dirty = draft != original
     ModalBottomSheet(onDismissRequest = { if (dirty) confirmDiscard = true else onDismiss() }, containerColor = MaterialTheme.colorScheme.surface) {
@@ -94,7 +98,9 @@ fun EntryDetailSheet(id: String, onDismiss: () -> Unit, vm: EntryDetailViewModel
             if (e.startDate != null || e.endDate != null) {
                 Text(listOfNotNull(e.startDate?.let { "Started ${Dates.toIsoDate(it)}" }, e.endDate?.let { "Finished ${Dates.toIsoDate(it)}" }).joinToString(" · "), fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
             }
+            com.anivault.ui.common.TagEditor(e.tags, tagSuggestions) { draft = e.copy(tags = it) }
             OutlinedTextField(e.notes, { draft = e.copy(notes = it) }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+            com.anivault.ui.detail.RelatedRow(RemoteIds.parse(e.remoteIds))
             if (e.genres.isNotEmpty()) Text(e.genres.joinToString(" · "), fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
             if (vm.showSynopsis && e.synopsis.isNotBlank()) Text(e.synopsis, fontSize = 14.sp)
             TextButton(onClick = { confirmMove = true }, Modifier.fillMaxWidth()) {

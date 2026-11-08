@@ -1,6 +1,8 @@
 package com.anivault.ui.discover
 
 import androidx.compose.foundation.layout.*
+import com.anivault.ui.common.CompactSearch
+import com.anivault.ui.common.ScrollToTop
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -216,23 +218,24 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
             }, colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface))
         }
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
-            OutlinedTextField(
-                value = ui.query, onValueChange = viewModel::onQuery, singleLine = true,
-                placeholder = { Text("Search anime") }, leadingIcon = { Icon(Icons.Default.Search, null) },
-                trailingIcon = { if (ui.query.isNotEmpty()) IconButton(onClick = { viewModel.onQuery("") }) { Icon(Icons.Default.Clear, "Clear search") } },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), shape = RoundedCornerShape(14.dp)
-            )
-            if (ui.query.isBlank() && ui.sections.isNotEmpty()) {
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(ui.sections) { s -> FilterChip(ui.section == s, { viewModel.setSection(s) }, { Text(s.label) }) }
+        Box(Modifier.padding(padding).fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            val header: @Composable () -> Unit = {
+                Column {
+                    CompactSearch(ui.query, viewModel::onQuery, "Search anime", Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+                    if (ui.query.isBlank() && ui.sections.isNotEmpty()) {
+                        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(ui.sections) { s -> FilterChip(ui.section == s, { viewModel.setSection(s) }, { Text(s.label, fontSize = 13.sp) }) }
+                        }
+                    }
+                    val note = buildString {
+                        ui.servedBy?.let { if (ui.status == DiscoverStatus.Content) append("Results from $it") }
+                        if (ui.skipped.isNotEmpty() && ui.status == DiscoverStatus.Content) append(" · ${ui.skipped.joinToString { s -> s.sourceName }} unavailable")
+                    }
+                    if (note.isNotEmpty()) Text(note, fontSize = 11.sp, color = MaterialTheme.colorScheme.dim, modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp))
                 }
             }
-            val note = buildString {
-                ui.servedBy?.let { if (ui.status == DiscoverStatus.Content) append("Results from $it") }
-                if (ui.skipped.isNotEmpty() && ui.status == DiscoverStatus.Content) append(" · ${ui.skipped.joinToString { s -> s.sourceName }} unavailable")
-            }
-            if (note.isNotEmpty()) Text(note, fontSize = 12.sp, color = MaterialTheme.colorScheme.dim, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+            if (ui.status != DiscoverStatus.Content) header()
             when (val st = ui.status) {
                 DiscoverStatus.Loading -> LoadingBox()
                 DiscoverStatus.Idle -> EmptyState("Keep typing", "Enter at least two characters.", Icons.Default.Search)
@@ -242,11 +245,16 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
                     "Couldn't reach your sources", viewModel::retry,
                     detail = st.failures.joinToString("\n") { "${it.sourceName}: ${it.kind.label}" }
                 )
-                DiscoverStatus.Content -> LazyColumn(state = listState, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(sortedItems, key = { it.canonicalId }) { a -> ResultRow(a, a.canonicalId in ui.inLibrary) { detail = a } }
+                DiscoverStatus.Content -> LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // The search box and chips are the first list item, so they scroll away with the results.
+                    item(key = "header") { header() }
+                    items(sortedItems, key = { it.canonicalId }) { a -> Box(Modifier.padding(horizontal = 16.dp)) { ResultRow(a, a.canonicalId in ui.inLibrary) { detail = a } } }
                     if (ui.loadingMore) item { LoadingBox() }
                 }
             }
+        }
+        val scope = rememberCoroutineScope()
+        ScrollToTop(listState.firstVisibleItemIndex > 3) { scope.launch { listState.animateScrollToItem(0) } }
         }
     }
 
@@ -299,6 +307,7 @@ fun CatalogSheet(a: NormalizedAnime, inLibrary: Boolean, onAdd: (WatchStatus?) -
             }
             if (a.genres.isNotEmpty()) Text(a.genres.joinToString(" · "), fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
             Text(a.synopsis.ifBlank { "No synopsis available." }, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+            if (a.remoteIds.isNotEmpty()) com.anivault.ui.detail.RelatedRow(a.remoteIds)
             if (inLibrary) {
                 AssistChip(onClick = {}, label = { Text("Already in your library") }, leadingIcon = { Icon(Icons.Default.Check, null) })
             } else {

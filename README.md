@@ -78,6 +78,9 @@ Kotlin · Jetpack Compose · Material 3 · Room + SQLCipher · No ads, no analyt
 **Look and feel**
 - Dark, light or follow-system, plus styles: AniVault, Material You, Frosted glass, AMOLED black, Midnight blue, Forest, Sunset and Sakura.
 
+### Also included
+Sync preview and log, new-episode alerts with a "This week" view, custom tags, related titles, MyAnimeList export import, and a home-screen +1 episode widget. See [CHANGELOG.md](CHANGELOG.md).
+
 ## Install
 
 Download an APK from the [Releases](../../releases) page.

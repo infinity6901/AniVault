@@ -114,6 +114,23 @@ fun AccountScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
             if (syncing) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)) }
             Text(if (syncing) "Syncing…" else "Sync now")
         }
+        val syncText by vm.syncText.collectAsStateWithLifecycle()
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = vm::previewSync, enabled = !syncing && states.values.any { it.connected && !it.needsReauth }, modifier = Modifier.weight(1f)) { Text("Preview changes") }
+            OutlinedButton(onClick = vm::showSyncLog, modifier = Modifier.weight(1f)) { Text("Sync log") }
+        }
+        syncText?.let { (title, lines) ->
+            AlertDialog(
+                onDismissRequest = vm::closeSyncText, title = { Text(title) },
+                text = {
+                    androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max = 380.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        items(lines.size) { i -> Text(lines[i], fontSize = 13.sp, fontWeight = if (lines[i].startsWith("—")) FontWeight.Bold else FontWeight.Normal) }
+                    }
+                },
+                confirmButton = { TextButton(onClick = vm::closeSyncText) { Text("Close") } },
+                dismissButton = if (title == "Sync log") ({ TextButton(onClick = vm::clearSyncLog) { Text("Clear log") } }) else null
+            )
+        }
         var delRemote by remember { mutableStateOf(vm.prefs.deleteOnAccounts) }
         var markVault by remember { mutableStateOf(vm.prefs.markVaultOnAccounts) }
         GroupLabel("Deleting and H-Vault")
@@ -159,6 +176,10 @@ fun LibrarySettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewMo
         GroupLabel("Progress")
         SwitchRow("Mark completed automatically", "When progress reaches the last known episode.", auto) { auto = it; p.autoCompleteOnLast = it }
         SwitchRow("Show +1 button", "Quick “next episode” on Continue Watching cards.", plus) { plus = it; p.showPlusOne = it }
+        GroupLabel("Cover images")
+        Note("Covers are saved on this device after the first load so lists open instantly and work offline. If a cover looks wrong or low quality, refresh them.")
+        val busyCovers by vm.busy.collectAsStateWithLifecycle()
+        OutlinedButton(onClick = vm::refreshCovers, enabled = !busyCovers, modifier = Modifier.fillMaxWidth()) { Text("Refresh library covers") }
         GroupLabel("Details")
         SwitchRow("Show synopsis", null, syn) { syn = it; p.showSynopsis = it }
         SwitchRow("Confirm before deleting", "Deleting always offers Undo afterwards.", confirm) { confirm = it; p.confirmDelete = it }
@@ -240,6 +261,10 @@ fun BackupScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
         OutlinedButton(onClick = { open.launch(arrayOf("*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Restore from backup…") }
         if (canUndo) OutlinedButton(onClick = vm::undoRestore, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Undo last restore") }
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        GroupLabel("Import from MyAnimeList")
+        Note("Export your list on myanimelist.net (Profile → Export), then pick the .xml or .xml.gz file here. Titles already in AniVault are skipped; covers and genres are filled in from AniList.")
+        val importMal = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u -> if (u != null) vm.importMal(u) }
+        OutlinedButton(onClick = { importMal.launch(arrayOf("*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Import MAL export…") }
         GroupLabel("Export your list")
         Note("Readable copies of your anime library saved to Downloads. These are not encrypted.")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -347,6 +372,7 @@ fun AdvancedScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) 
     var emptyFb by remember { mutableStateOf(p.fallbackOnEmpty) }
     var notif by remember { mutableStateOf(p.notifEnabled && Notifications.hasPermission(ctx)) }
     var reminders by remember { mutableStateOf(p.notifReminders) }
+    var airing by remember { mutableStateOf(p.notifAiring) }
     var qs by remember { mutableStateOf(p.quietStartHour) }
     var qe by remember { mutableStateOf(p.quietEndHour) }
     var confirmReset by remember { mutableStateOf(false) }
@@ -371,6 +397,7 @@ fun AdvancedScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) 
             else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !Notifications.hasPermission(ctx)) perm.launch(Manifest.permission.POST_NOTIFICATIONS)
             else { notif = true; p.notifEnabled = true; vm.applyNotifications() }
         }
+        SwitchRow("New episode alerts", "Tells you when a show you're watching has a new episode out (needs the show linked to AniList or MyAnimeList). The lock screen only says \"New episode available\".", airing, notif) { airing = it; p.notifAiring = it; vm.applyNotifications() }
         SwitchRow("Watch reminders", "A daily nudge when shows have sat untouched for a few days.", reminders, notif) { reminders = it; p.notifReminders = it; vm.applyNotifications() }
         if (notif) {
             Text("Quiet hours: ${"%02d".format(qs)}:00 – ${"%02d".format(qe)}:00", color = MaterialTheme.colorScheme.onSurface)

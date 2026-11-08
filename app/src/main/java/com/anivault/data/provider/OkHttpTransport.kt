@@ -41,6 +41,9 @@ class OkHttpTransport(
             request.method.equals("PUT", ignoreCase = true)
         ) {
             builder.method(request.method.uppercase(), (request.body ?: "").toRequestBody(request.contentType.toMediaType()))
+        } else if (request.method.equals("DELETE", ignoreCase = true)) {
+            // Previously fell through to GET, so account deletes were sent as reads (MAL answered 405).
+            builder.delete()
         } else {
             builder.get()
         }
