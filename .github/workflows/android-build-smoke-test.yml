@@ -42,7 +42,7 @@ jobs:
       publish: ${{ steps.decide.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with: { distribution: temurin, java-version: '17' }
       # A fixed signing key keeps updates installable over the previous build. It comes from the repository
       # secret ANIVAULT_KEYSTORE_B64 (base64 of the keystore; alias androiddebugkey, password "android").
@@ -92,7 +92,7 @@ jobs:
       checks: ${{ steps.checks.outcome }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v4
       - uses: actions/download-artifact@v4
@@ -145,7 +145,7 @@ jobs:
       build: ${{ steps.build.outcome }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v4
       - uses: actions/download-artifact@v4
