@@ -95,7 +95,7 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { name: ci-keystore, path: keystore }
       - name: Install the shared debug key
         run: |
@@ -148,7 +148,7 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { name: ci-keystore, path: keystore }
       - name: Install the shared debug key
         run: |
@@ -189,9 +189,9 @@ jobs:
       smoke: ${{ steps.smoke.outcome }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { pattern: apk-*, path: apks, merge-multiple: true }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { name: ci-keystore, path: keystore }
       - name: Verify APK signatures (shared debug key)
         id: verify
@@ -242,9 +242,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { pattern: diag-*, path: ., merge-multiple: true }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { pattern: apk-*, path: apks, merge-multiple: true }
       - name: Generate report and log failure causes
         env:
@@ -288,7 +288,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { pattern: apk-*, path: apks, merge-multiple: true }
       - name: Create release
         env:
