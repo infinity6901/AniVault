@@ -53,15 +53,7 @@ fun StatusChip(status: WatchStatus, modifier: Modifier = Modifier) {
 @Composable
 fun Poster(url: String, modifier: Modifier = Modifier, shape: RoundedCornerShape = RoundedCornerShape(12.dp)) {
     Box(modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceVariant)) {
-        if (url.isNotBlank()) {
-            // Prefer the larger CDN variant; if it is missing, fall back to the stored URL.
-            var useOriginal by androidx.compose.runtime.remember(url) { androidx.compose.runtime.mutableStateOf(false) }
-            val better = androidx.compose.runtime.remember(url) { CoverUrls.upgrade(url) }
-            AsyncImage(
-                model = if (useOriginal) url else better, contentDescription = null, contentScale = ContentScale.Crop,
-                onError = { if (!useOriginal && better != url) useOriginal = true }, modifier = Modifier.fillMaxSize()
-            )
-        }
+        if (url.isNotBlank()) AsyncImage(model = url, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
     }
 }
 

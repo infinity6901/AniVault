@@ -10,23 +10,23 @@
         android:id="@+id/widget_cover"
         android:layout_width="0dp"
         android:layout_height="match_parent"
-        android:layout_weight="1"
+        android:layout_weight="0.8"
         android:contentDescription="Cover art"
         android:scaleType="centerCrop" />
 
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="match_parent"
-        android:layout_weight="1.25"
+        android:layout_weight="1.2"
         android:gravity="center_vertical"
         android:orientation="vertical"
-        android:padding="12dp">
+        android:padding="10dp">
 
         <TextView
             android:id="@+id/widget_label"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="CONTINUE WATCHING"
+            android:text="WATCHING"
             android:textColor="#B39DFF"
             android:textSize="10sp"
             android:textStyle="bold" />
@@ -68,14 +68,23 @@
                 android:layout_height="36dp"
                 android:layout_weight="1"
                 android:contentDescription="Mark one more episode watched"
-                android:text="+1 ep"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp"
+                android:text="+1"
                 android:textSize="12sp" />
 
             <Button
                 android:id="@+id/widget_next"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
+                android:layout_weight="1"
                 android:layout_height="36dp"
                 android:layout_marginStart="6dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp"
                 android:contentDescription="Show next title"
                 android:text="Next"
                 android:textSize="12sp" />

@@ -100,6 +100,8 @@ fun VaultLibraryTab(entries: List<HVaultEntry>, vm: VaultViewModel) {
         val gridState = rememberLazyGridState()
         val listState = rememberLazyListState()
         val scope = rememberCoroutineScope()
+        val appCtx = androidx.compose.ui.platform.LocalContext.current.applicationContext
+        LaunchedEffect(entries.size) { com.anivault.ui.common.CoverCache.preload(appCtx, entries.map { it.imageUrl }) }
         val header: @Composable () -> Unit = {
             Column {
                 CompactSearch(text, { text = it }, "Search your vault", Modifier.padding(horizontal = 16.dp, vertical = 6.dp), trailing = {

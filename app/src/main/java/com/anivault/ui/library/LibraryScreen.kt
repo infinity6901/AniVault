@@ -185,6 +185,8 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
         val gridState = rememberLazyGridState()
         val listState = rememberLazyListState()
         val scope = rememberCoroutineScope()
+        val appCtx = androidx.compose.ui.platform.LocalContext.current.applicationContext
+        LaunchedEffect(ui.all.size) { com.anivault.ui.common.CoverCache.preload(appCtx, ui.all.map { it.imageUrl }) }
         val rows = remember(ui.shown, grouped) {
             if (grouped) com.anivault.data.library.Franchise.group(ui.shown) else ui.shown.map { com.anivault.data.library.Franchise.Group(it.id, listOf(it)) }
         }

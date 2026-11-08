@@ -176,6 +176,10 @@ fun LibrarySettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewMo
         GroupLabel("Progress")
         SwitchRow("Mark completed automatically", "When progress reaches the last known episode.", auto) { auto = it; p.autoCompleteOnLast = it }
         SwitchRow("Show +1 button", "Quick “next episode” on Continue Watching cards.", plus) { plus = it; p.showPlusOne = it }
+        GroupLabel("Cover images")
+        Note("Covers are saved on this device after the first load so lists open instantly and work offline. If a cover looks wrong or low quality, refresh them.")
+        val busyCovers by vm.busy.collectAsStateWithLifecycle()
+        OutlinedButton(onClick = vm::refreshCovers, enabled = !busyCovers, modifier = Modifier.fillMaxWidth()) { Text("Refresh library covers") }
         GroupLabel("Details")
         SwitchRow("Show synopsis", null, syn) { syn = it; p.showSynopsis = it }
         SwitchRow("Confirm before deleting", "Deleting always offers Undo afterwards.", confirm) { confirm = it; p.confirmDelete = it }

@@ -135,6 +135,12 @@ class SettingsViewModel @Inject constructor(
         _canUndo.value = backup.canUndoRestore
     }
 
+    fun refreshCovers() = launchBusy {
+        val urls = withContext(Dispatchers.IO) { animeDao.getAll().map { it.imageUrl } + hvaultDao.getAll().map { it.imageUrl } }
+        com.anivault.ui.common.CoverCache.refresh(ctx, urls)
+        say("Cleared cached covers. Downloading ${urls.filter { it.isNotBlank() }.distinct().size} again in the background.")
+    }
+
     fun importMal(uri: Uri) = launchBusy {
         val r = withContext(Dispatchers.IO) {
             ctx.contentResolver.openInputStream(uri)?.use { malImporter.import(it) }
