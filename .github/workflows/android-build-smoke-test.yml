@@ -41,7 +41,7 @@ jobs:
     outputs:
       publish: ${{ steps.decide.outputs.publish }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
       # A fixed signing key keeps updates installable over the previous build. It comes from the repository
@@ -91,7 +91,7 @@ jobs:
       build: ${{ steps.build.outcome }}
       checks: ${{ steps.checks.outcome }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v4
@@ -144,7 +144,7 @@ jobs:
     outputs:
       build: ${{ steps.build.outcome }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v4
@@ -188,7 +188,7 @@ jobs:
       verify: ${{ steps.verify.outcome }}
       smoke: ${{ steps.smoke.outcome }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with: { pattern: apk-*, path: apks, merge-multiple: true }
       - uses: actions/download-artifact@v4
@@ -241,7 +241,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with: { pattern: diag-*, path: ., merge-multiple: true }
       - uses: actions/download-artifact@v4
@@ -287,7 +287,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with: { pattern: apk-*, path: apks, merge-multiple: true }
       - name: Create release
