@@ -65,7 +65,7 @@ jobs:
             printf '## Signing key\n**Throw-away key** (secret ANIVAULT_KEYSTORE_B64 not set): this build will not install as an update over earlier ones.\n' >> "$GITHUB_STEP_SUMMARY"
           fi
           cp "$ANDROID_USER_HOME/debug.keystore" keystore/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: ci-keystore, path: keystore/debug.keystore, retention-days: 1 }
       - name: Decide whether this run publishes a release
         id: decide
@@ -116,10 +116,10 @@ jobs:
         run: |
           set -o pipefail
           ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest :app:lintDebug 2>&1 | tee "$DIAG_DIR/gradle-checks.log"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with: { name: apk-debug, path: apks/*.apk, if-no-files-found: ignore, retention-days: 14 }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: diag-gate1
@@ -165,10 +165,10 @@ jobs:
             abi="$(basename "$f" -release.apk)"; abi="${abi#app-}"
             cp "$f" "apks/AniVault-foss-release-$abi.apk"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with: { name: apk-release, path: apks/*.apk, if-no-files-found: ignore, retention-days: 14 }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: diag-release
@@ -218,7 +218,7 @@ jobs:
           emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -memory 3072
           # One line only: the action runs each script line in its own shell.
           script: bash scripts/smoke-test.sh "Debug APK (universal)=apks/AniVault-debug-universal.apk" "FOSS release APK (x86_64)=apks/AniVault-foss-release-x86_64.apk"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: diag-emulator
@@ -258,10 +258,10 @@ jobs:
           mkdir -p "$DIAG_DIR"
           cat "$DIAG_DIR"/gradle-build-*.log > "$DIAG_DIR/gradle-build.log" 2>/dev/null || true
           scripts/ci-report.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with: { name: "anivault-apks-${{ github.run_number }}", path: apks/*.apk, if-no-files-found: warn, retention-days: 14 }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: "anivault-reports-${{ github.run_number }}"
