@@ -216,7 +216,7 @@ class AiringWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             runCatching { NotificationManagerCompat.from(applicationContext).notify(notifId, n) }
             repo.markNotified("${item.libraryId}:${item.episode}")
         }
-        fresh.drop(5).forEach { repo.markNotified("${item.libraryId}:${item.episode}") }
+        fresh.drop(5).forEach { item -> repo.markNotified("${item.libraryId}:${item.episode}") }
         return Result.success()
     }
 }

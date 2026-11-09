@@ -37,6 +37,7 @@ import com.anivault.di.MigrationStatus
 import com.anivault.notify.Notifications
 import com.anivault.ui.common.*
 import com.anivault.ui.theme.dim
+import com.anivault.ui.theme.liquidGlassPanel
 import java.text.DateFormat
 import java.util.Date
 
@@ -308,7 +309,7 @@ fun AppearanceScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .let { com.anivault.ui.theme.run { it.liquidGlassPanel(previewCfg, androidx.compose.foundation.shape.RoundedCornerShape(16.dp), 16f, elevated = true) } }
+                    .liquidGlassPanel(previewCfg, androidx.compose.foundation.shape.RoundedCornerShape(16.dp), 16f, elevated = true)
                     .padding(14.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {

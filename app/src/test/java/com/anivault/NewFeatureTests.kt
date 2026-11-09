@@ -6,10 +6,9 @@ import com.anivault.data.library.MalParser
 import com.anivault.data.library.ProgressRules
 import com.anivault.data.library.SmartListPreset
 import com.anivault.data.library.SmartLists
-import com.anivault.data.library.SortField
 import com.anivault.data.library.StatsCalculator
 import com.anivault.data.local.entity.AnimeEntry
-import com.anivault.data.local.model.MediaType
+import com.anivault.data.local.entity.RemoteIds
 import com.anivault.data.local.model.WatchStatus
 import com.anivault.data.provider.AiringFormat
 import com.anivault.ui.common.CoverPalette
@@ -118,10 +117,11 @@ class NewFeatureTests {
         assertEquals(0, rewatching.watchedEpisodes)
         assertEquals(2, rewatching.rewatchCount)
 
+        assertEquals(52, StatsCalculator.totalWatchedWithRewatches(completed))
         val stats = StatsCalculator.compute(listOf(completed))
-        assertEquals(26, stats.totalWatchedEpisodes)
-        assertEquals(52, stats.totalWatchedWithRewatches)
+        assertEquals(52, stats.episodesWatched)
         assertEquals(1, stats.totalRewatches)
+        assertEquals(1, stats.rewatchedTitles)
     }
 
     @Test fun smartListsRoundTripAndRandomPick() {
@@ -129,8 +129,7 @@ class NewFeatureTests {
             name = "Short Fantasy",
             status = WatchStatus.PLAN_TO_WATCH,
             genre = "Fantasy",
-            sort = SortField.RATING,
-            ascending = false
+            minRating = 8f
         )
         val encoded = SmartLists.encode(listOf(preset))
         val decoded = SmartLists.parse(encoded)
@@ -138,13 +137,14 @@ class NewFeatureTests {
         assertEquals("Short Fantasy", decoded[0].name)
         assertEquals(WatchStatus.PLAN_TO_WATCH, decoded[0].status)
         assertEquals("Fantasy", decoded[0].genre)
+        assertEquals(8f, decoded[0].minRating!!, 0.01f)
 
         val entries = listOf(
             AnimeEntry(id = "1", title = "Frieren", status = WatchStatus.PLAN_TO_WATCH, totalEpisodes = 12, genres = listOf("Fantasy")),
             AnimeEntry(id = "2", title = "One Piece", status = WatchStatus.PLAN_TO_WATCH, totalEpisodes = 1000, genres = listOf("Fantasy")),
             AnimeEntry(id = "3", title = "Cyberpunk", status = WatchStatus.WATCHING, totalEpisodes = 10, genres = listOf("Sci-Fi"))
         )
-        val picked = SmartLists.pickRandom(entries, status = WatchStatus.PLAN_TO_WATCH, genre = "Fantasy", maxEpisodes = 13, rng = Random(42))
+        val picked = SmartLists.pickRandom(entries, status = WatchStatus.PLAN_TO_WATCH, genre = "Fantasy", maxEpisodes = 13, random = Random(42))
         assertNotNull(picked)
         assertEquals("1", picked?.id)
     }
@@ -152,16 +152,16 @@ class NewFeatureTests {
     @Test fun csvAndMalXmlExports() {
         val entry = AnimeEntry(
             id = "mal:1",
-            malId = 1,
             title = "Cowboy Bebop, The Movie",
-            mediaType = MediaType.MOVIE,
+            format = "Movie",
             status = WatchStatus.COMPLETED,
             totalEpisodes = 1,
             watchedEpisodes = 1,
             rewatchCount = 2,
             rating = 9.5f,
             genres = listOf("Action", "Sci-Fi"),
-            tags = listOf("classic")
+            tags = listOf("classic"),
+            remoteIds = RemoteIds.encode(mapOf("mal" to "1"))
         )
         val csv = ListExportCodec.toCsv(listOf(entry))
         val parsed = ListExportCodec.fromCsv(csv, now = 999L)
