@@ -48,6 +48,7 @@ import com.anivault.ui.common.*
 import com.anivault.ui.home.progressLabel
 import com.anivault.ui.theme.AniVaultColors
 import com.anivault.ui.theme.dim
+import com.anivault.ui.theme.TrackGlassOverlay
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -219,6 +220,7 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
                         Box {
                             IconButton(onClick = { statusMenu = true }) { Icon(Icons.Default.Edit, "Change status") }
                             DropdownMenu(statusMenu, { statusMenu = false }) {
+                            if (statusMenu) TrackGlassOverlay()
                                 WatchStatus.values().forEach { s -> DropdownMenuItem({ Text(s.label) }, onClick = { statusMenu = false; viewModel.setStatus(s) }) }
                             }
                         }
@@ -242,6 +244,7 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
                         Box {
                             IconButton(onClick = { sortMenu = true }) { Icon(Icons.Default.Sort, "Sort") }
                             DropdownMenu(sortMenu, { sortMenu = false }) {
+                            if (sortMenu) TrackGlassOverlay()
                                 LibrarySort.values().forEach { s ->
                                     DropdownMenuItem(
                                         { Text(s.label, fontWeight = if (s == ui.query.sort) FontWeight.Bold else FontWeight.Normal) },
@@ -361,7 +364,8 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
     }
 
     openGroup?.let { g ->
-        ModalBottomSheet(onDismissRequest = { openGroup = null }) {
+        ModalBottomSheet(onDismissRequest = { openGroup = null }, containerColor = MaterialTheme.colorScheme.surface, scrimColor = Color.Black.copy(alpha = 0.62f)) {
+            TrackGlassOverlay()
             Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(g.lead.title, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 g.members.sortedBy { it.year ?: 9999 }.forEach { m -> ListItemRow(m, false, false, { openGroup = null; onOpenEntry(m.id) }, { openGroup = null; onOpenEntry(m.id) }) }
@@ -567,7 +571,8 @@ fun RandomPickerSheet(
 
     LaunchedEffect(Unit) { spin() }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface, scrimColor = Color.Black.copy(alpha = 0.62f)) {
+        TrackGlassOverlay()
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Casino, null, tint = MaterialTheme.colorScheme.primary)
@@ -628,7 +633,8 @@ fun RandomPickerSheet(
 @Composable
 private fun FilterSheet(ui: LibraryUi, vm: LibraryViewModel, onDismiss: () -> Unit) {
     var presetName by remember { mutableStateOf("") }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface, scrimColor = Color.Black.copy(alpha = 0.62f)) {
+        TrackGlassOverlay()
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Filters", Modifier.weight(1f), fontWeight = FontWeight.Bold, fontSize = 18.sp)

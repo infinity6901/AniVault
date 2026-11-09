@@ -33,6 +33,7 @@ import com.anivault.data.local.model.WatchStatus
 import com.anivault.data.provider.*
 import com.anivault.ui.common.*
 import com.anivault.ui.theme.dim
+import com.anivault.ui.theme.TrackGlassOverlay
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -233,6 +234,7 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
                 Box {
                     IconButton(onClick = { sortMenu = true }) { Icon(Icons.Default.SwapVert, "Sort") }
                     DropdownMenu(sortMenu, { sortMenu = false }) {
+                            if (sortMenu) TrackGlassOverlay()
                         DiscoverSort.values().forEach { o ->
                             DropdownMenuItem(
                                 text = { Text(o.label, fontWeight = if (o == ui.sort) FontWeight.Bold else FontWeight.Normal) },
@@ -360,7 +362,8 @@ private fun ResultRow(a: NormalizedAnime, inLibrary: Boolean, onClick: () -> Uni
 @Composable
 fun CatalogSheet(a: NormalizedAnime, inLibrary: Boolean, onAdd: (WatchStatus?) -> Unit, onDismiss: () -> Unit) {
     val accent = rememberCoverAccent(a.coverUrl, MaterialTheme.colorScheme.primary)
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface, scrimColor = Color.Black.copy(alpha = 0.62f)) {
+        TrackGlassOverlay()
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(
                 Modifier.fillMaxWidth()
@@ -415,7 +418,8 @@ private fun DiscoverFilters(current: SearchFilters, onApply: (SearchFilters) -> 
     var country by remember { mutableStateOf(current.country) }
     var minEps by remember { mutableStateOf(current.minEpisodes?.toString().orEmpty()) }
     var maxEps by remember { mutableStateOf(current.maxEpisodes?.toString().orEmpty()) }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface, scrimColor = Color.Black.copy(alpha = 0.62f)) {
+        TrackGlassOverlay()
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Filters", fontWeight = FontWeight.Bold, fontSize = 18.sp)
             Text("Applied on this device to what each source returns. A filter only hides a title when the source reports that detail.", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)

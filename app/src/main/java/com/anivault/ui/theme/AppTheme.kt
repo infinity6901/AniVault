@@ -1,7 +1,6 @@
 package com.anivault.ui.theme
 
 import android.os.Build
-import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,10 +12,13 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import com.anivault.data.local.model.WatchStatus
 
 /** Design tokens from the product specification (§2). */
@@ -131,33 +133,40 @@ private fun lightScheme(t: Tone): ColorScheme {
     )
 }
 
-/** Builds a dynamic refractive ColorScheme for Liquid Glass & Frosted Glass based on [LiquidGlassConfig]. */
+/**
+ * Builds a dynamic refractive ColorScheme for Liquid Glass & Frosted Glass.
+ * Note: Individual cards (`AniCard`) draw their own translucent glass fill via `Modifier.liquidGlassPanel`,
+ * whereas `surface`, `surfaceContainer`, and `surfaceContainerHigh` are used by `ModalBottomSheet`,
+ * `DropdownMenu`, `AlertDialog`, and `TopAppBar` — so they use a deep frosted opacity (0.92f–0.97f)
+ * to ensure overlay sheets, menus, and dialogs never bleed unblurred background text through!
+ */
 private fun liquidGlassScheme(cfg: LiquidGlassConfig): ColorScheme {
     val t = cfg.tint
-    val surfaceBase = lerp(t.baseStart, t.primary, 0.14f)
-    val panelColor = surfaceBase.copy(alpha = cfg.panelAlpha.coerceIn(0.10f, 0.70f))
-    val barColor = surfaceBase.copy(alpha = cfg.barAlpha.coerceIn(0.20f, 0.85f))
-    val sheetColor = lerp(t.baseStart, t.baseEnd, 0.5f).copy(alpha = (cfg.barAlpha + 0.12f).coerceIn(0.65f, 0.94f))
-    val rimAlpha = (0.18f + 0.38f * cfg.specularIntensity).coerceIn(0.15f, 0.60f)
+    val deepGlassBase = lerp(t.baseStart, t.baseEnd, 0.45f)
+    val tintedSurface = lerp(deepGlassBase, t.primary, 0.10f)
+    val sheetSurface = tintedSurface.copy(alpha = 0.94f)
+    val menuSurface = lerp(deepGlassBase, t.primary, 0.14f).copy(alpha = 0.97f)
+    val dialogSurface = lerp(deepGlassBase, t.secondary, 0.12f).copy(alpha = 0.96f)
+    val rimAlpha = (0.22f + 0.36f * cfg.specularIntensity).coerceIn(0.18f, 0.62f)
     return darkColorScheme(
         primary = t.primary,
-        onPrimary = lerp(t.baseStart, Color.Black, 0.35f),
+        onPrimary = lerp(t.baseStart, Color.Black, 0.40f),
         secondary = t.secondary,
-        onSecondary = lerp(t.baseStart, Color.Black, 0.35f),
+        onSecondary = lerp(t.baseStart, Color.Black, 0.40f),
         tertiary = t.tertiary,
         background = Color.Transparent,
         onBackground = Color(0xFFF6FAFF),
-        surface = panelColor,
+        surface = sheetSurface,
         onSurface = Color(0xFFF6FAFF),
-        surfaceVariant = Color.White.copy(alpha = (cfg.panelAlpha * 0.65f).coerceIn(0.08f, 0.35f)),
+        surfaceVariant = lerp(deepGlassBase, Color.White, 0.14f).copy(alpha = (cfg.panelAlpha + 0.22f).coerceIn(0.32f, 0.72f)),
         onSurfaceVariant = Color(0xFFD2E2F2),
-        surfaceContainerLowest = Color.White.copy(alpha = 0.08f),
-        surfaceContainerLow = barColor,
-        surfaceContainer = barColor,
-        surfaceContainerHigh = sheetColor,
-        surfaceContainerHighest = sheetColor,
+        surfaceContainerLowest = deepGlassBase.copy(alpha = 0.88f),
+        surfaceContainerLow = sheetSurface,
+        surfaceContainer = menuSurface,
+        surfaceContainerHigh = dialogSurface,
+        surfaceContainerHighest = dialogSurface,
         outline = Color.White.copy(alpha = rimAlpha),
-        outlineVariant = t.primary.copy(alpha = rimAlpha * 0.7f),
+        outlineVariant = t.primary.copy(alpha = rimAlpha * 0.75f),
         error = Color(0xFFFFB4AB),
         onError = Color(0xFF410002)
     )
@@ -182,6 +191,7 @@ fun AniVaultTheme(
     val parentGlass = LocalLiquidGlass.current
     val isGlassPalette = pal == Palette.LIQUID_GLASS || pal == Palette.GLASS
     val effectiveGlass = (liquidGlass ?: parentGlass).copy(enabled = isGlassPalette)
+    val overlayState = remember { GlassOverlayState() }
 
     val dark = when {
         isGlassPalette || pal == Palette.AMOLED || pal == Palette.CYBERPUNK || pal == Palette.CRIMSON -> true
@@ -203,15 +213,23 @@ fun AniVaultTheme(
     }
     CompositionLocalProvider(
         LocalPalette provides pal,
-        LocalLiquidGlass provides effectiveGlass
+        LocalLiquidGlass provides effectiveGlass,
+        LocalGlassOverlay provides overlayState
     ) {
         MaterialTheme(colorScheme = scheme) {
-            // Keep the root Box stable so switching palettes never drops navigation state.
+            // When any ModalBottomSheet, AlertDialog, or DropdownMenu is active, blur the underlying viewport
+            // so overlays sit on a true Gaussian-blurred glass backdrop instead of sharp competing text.
+            val blurUnderlying = isGlassPalette && overlayState.activeCount > 0
             Box(Modifier.fillMaxSize()) {
                 if (isGlassPalette) {
                     LiquidGlassBackdrop(config = effectiveGlass)
                 }
-                content()
+                Box(
+                    if (blurUnderlying) Modifier.fillMaxSize().blur(18.dp)
+                    else Modifier.fillMaxSize()
+                ) {
+                    content()
+                }
             }
         }
     }

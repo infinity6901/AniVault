@@ -32,6 +32,7 @@ import coil.request.CachePolicy
 import coil.request.ImageRequest
 import com.anivault.data.local.model.WatchStatus
 import com.anivault.ui.theme.LocalLiquidGlass
+import com.anivault.ui.theme.TrackGlassOverlay
 import com.anivault.ui.theme.color
 import com.anivault.ui.theme.dim
 import com.anivault.ui.theme.liquidGlassPanel
@@ -124,6 +125,7 @@ fun LoadingBox(modifier: Modifier = Modifier) {
 
 @Composable
 fun ConfirmDialog(title: String, text: String, confirm: String, onConfirm: () -> Unit, onDismiss: () -> Unit, destructive: Boolean = false) {
+    TrackGlassOverlay()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) }, text = { Text(text) },

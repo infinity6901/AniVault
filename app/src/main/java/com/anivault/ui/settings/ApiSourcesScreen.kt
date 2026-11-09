@@ -30,6 +30,7 @@ import com.anivault.data.provider.*
 import com.anivault.ui.common.*
 import com.anivault.ui.theme.AniVaultColors
 import com.anivault.ui.theme.dim
+import com.anivault.ui.theme.TrackGlassOverlay
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -199,6 +200,7 @@ private fun SourceRow(
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More actions for ${s.name}") }
                 DropdownMenu(menu, { menu = false }) {
+                    if (menu) TrackGlassOverlay()
                     DropdownMenuItem({ Text("Edit") }, onClick = { menu = false; onEdit() })
                     DropdownMenuItem({ Text("Test") }, onClick = { menu = false; onTest() })
                     DropdownMenuItem({ Text("Move up") }, enabled = index > 0, onClick = { menu = false; onMove(-1) })
@@ -242,7 +244,8 @@ private fun SourceSheet(existing: ApiSource?, vm: ApiSourcesViewModel, onDone: (
 
     fun invalidate() { result = null; error = null }
 
-    ModalBottomSheet(onDismissRequest = { if (dirty) discard = true else onDone(null) }, containerColor = MaterialTheme.colorScheme.surface) {
+    ModalBottomSheet(onDismissRequest = { if (dirty) discard = true else onDone(null) }, containerColor = MaterialTheme.colorScheme.surface, scrimColor = Color.Black.copy(alpha = 0.62f)) {
+        TrackGlassOverlay()
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(if (existing == null) "Add API Source" else "Edit API Source", fontWeight = FontWeight.Bold, fontSize = 19.sp)
             OutlinedTextField(name, { name = it; invalidate() }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())

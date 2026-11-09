@@ -23,6 +23,28 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
+ * Tracks whether a ModalBottomSheet, AlertDialog, or DropdownMenu is currently open so
+ * [AniVaultTheme] can apply a Gaussian blur to the underlying screen content.
+ */
+@Stable
+class GlassOverlayState {
+    var activeCount by mutableIntStateOf(0)
+}
+
+val LocalGlassOverlay = compositionLocalOf { GlassOverlayState() }
+
+@Composable
+fun TrackGlassOverlay() {
+    val state = LocalGlassOverlay.current
+    DisposableEffect(state) {
+        state.activeCount++
+        onDispose {
+            state.activeCount = (state.activeCount - 1).coerceAtLeast(0)
+        }
+    }
+}
+
+/**
  * Tint presets for the customizable Liquid Glass theme and homescreen widgets.
  */
 enum class LiquidGlassTint(
@@ -132,7 +154,7 @@ data class LiquidGlassConfig(
     val widgetMatchCover: Boolean = true
 ) {
     val panelAlpha: Float get() = (opacityPct.coerceIn(10, 65) / 100f)
-    val barAlpha: Float get() = (panelAlpha + 0.14f).coerceAtMost(0.82f)
+    val barAlpha: Float get() = (panelAlpha + 0.58f).coerceIn(0.84f, 0.94f)
     val specularIntensity: Float get() = (specularPct.coerceIn(0, 100) / 100f)
 
     companion object {
@@ -234,7 +256,6 @@ fun LiquidGlassBackdrop(config: LiquidGlassConfig, modifier: Modifier = Modifier
             )
         }
 
-        // Subtle diagonal caustic light-sheen overlay across the viewport
         Canvas(Modifier.fillMaxSize()) {
             val spec = config.specularIntensity
             if (spec > 0.05f) {
@@ -276,8 +297,8 @@ fun Modifier.liquidGlassPanel(
     val baseAlpha = if (elevated) config.barAlpha else config.panelAlpha
     val spec = config.specularIntensity
 
-    val fillStart = lerp(config.tint.baseStart, accent, 0.16f).copy(alpha = (baseAlpha * 0.92f).coerceIn(0.08f, 0.88f))
-    val fillEnd = lerp(config.tint.baseEnd, Color.White, 0.08f).copy(alpha = (baseAlpha * 0.78f).coerceIn(0.06f, 0.84f))
+    val fillStart = lerp(config.tint.baseStart, accent, 0.16f).copy(alpha = (baseAlpha * 0.94f).coerceIn(0.10f, 0.94f))
+    val fillEnd = lerp(config.tint.baseEnd, Color.White, 0.08f).copy(alpha = (baseAlpha * 0.88f).coerceIn(0.08f, 0.90f))
 
     val fillBrush = Brush.linearGradient(
         colors = listOf(fillStart, fillEnd),

@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -169,8 +171,17 @@ class MainActivity : FragmentActivity() {
                         Box(
                             Modifier
                                 .fillMaxWidth()
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            Color.Transparent,
+                                            glass.tint.baseStart.copy(alpha = 0.78f),
+                                            glass.tint.baseStart.copy(alpha = 0.94f)
+                                        )
+                                    )
+                                )
                                 .navigationBarsPadding()
-                                .padding(horizontal = 16.dp, vertical = 10.dp)
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
                                 .liquidGlassPanel(config = glass, shape = dockShape, cornerRadiusDp = 28f, elevated = true)
                         ) {
                             NavigationBar(

@@ -37,6 +37,7 @@ import com.anivault.di.MigrationStatus
 import com.anivault.notify.Notifications
 import com.anivault.ui.common.*
 import com.anivault.ui.theme.dim
+import com.anivault.ui.theme.TrackGlassOverlay
 import com.anivault.ui.theme.liquidGlassPanel
 import java.text.DateFormat
 import java.util.Date
@@ -125,6 +126,7 @@ fun AccountScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
             AlertDialog(
                 onDismissRequest = vm::closeSyncText, title = { Text(title) },
                 text = {
+                    TrackGlassOverlay()
                     androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max = 380.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         items(lines.size) { i -> Text(lines[i], fontSize = 13.sp, fontWeight = if (lines[i].startsWith("—")) FontWeight.Bold else FontWeight.Normal) }
                     }
@@ -153,6 +155,7 @@ private fun KitsuDialog(onDismiss: () -> Unit, onSignIn: (String, String) -> Uni
     var email by remember { mutableStateOf("") }
     var pw by remember { mutableStateOf("") }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Sign in to Kitsu") }, text = {
+        TrackGlassOverlay()
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(email, { email = it }, label = { Text("Email") }, singleLine = true)
             OutlinedTextField(pw, { pw = it }, label = { Text("Password") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
@@ -478,6 +481,7 @@ fun BackupScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
     pwDialog?.let { kind ->
         var pw by remember { mutableStateOf("") }
         AlertDialog(onDismissRequest = { pwDialog = null }, title = { Text(if (kind == "export") "Choose a backup password" else "Backup password") }, text = {
+            TrackGlassOverlay()
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(pw, { pw = it }, label = { Text("Password") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
                 if (kind == "export") Note("At least 8 characters.")
@@ -497,6 +501,7 @@ fun BackupScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
         var withSettings by remember { mutableStateOf(pv.hasSettings) }
         var withSecrets by remember { mutableStateOf(false) }
         AlertDialog(onDismissRequest = vm::cancelRestore, title = { Text("Restore preview") }, text = {
+            TrackGlassOverlay()
             Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text("Backup from ${DateFormat.getDateTimeInstance().format(Date(pv.createdAt))}", fontSize = 13.sp)
                 if (pv.hasLibrary) Text("${pv.animeInBackup} titles: ${pv.animeNew} new, ${pv.animeConflicts} differ from yours, ${pv.animeIdentical} identical.")
@@ -612,6 +617,7 @@ fun AdvancedScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) 
     }
     if (confirmReset) ConfirmDialog("Reset preferences?", "Theme, tracking and network settings return to defaults.", "Reset", { confirmReset = false; vm.resetPrefs(); onBack() }, { confirmReset = false }, destructive = true)
     if (showLog) AlertDialog(onDismissRequest = { showLog = false }, title = { Text("Recent activity") }, text = {
+        TrackGlassOverlay()
         Column(Modifier.verticalScroll(rememberScrollState())) {
             if (entries.isEmpty()) Text("Nothing yet.")
             entries.forEach { e -> Text("${if (e.ok) "✓" else "✗"} ${e.source} · ${e.operation} · ${e.durationMs} ms" + (e.message?.let { "\n   $it" } ?: ""), fontSize = 12.sp, modifier = Modifier.padding(vertical = 3.dp)) }

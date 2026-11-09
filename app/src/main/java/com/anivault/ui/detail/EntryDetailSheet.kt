@@ -34,6 +34,7 @@ import com.anivault.data.local.model.WatchStatus
 import com.anivault.data.provider.Dates
 import com.anivault.ui.common.*
 import com.anivault.ui.theme.dim
+import com.anivault.ui.theme.TrackGlassOverlay
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -74,7 +75,8 @@ fun EntryDetailSheet(id: String, onDismiss: () -> Unit, vm: EntryDetailViewModel
     LaunchedEffect(id) { original = vm.load(id); draft = original; loaded = true; tagSuggestions = vm.allTags() }
 
     val dirty = draft != original
-    ModalBottomSheet(onDismissRequest = { if (dirty) confirmDiscard = true else onDismiss() }, containerColor = MaterialTheme.colorScheme.surface) {
+    ModalBottomSheet(onDismissRequest = { if (dirty) confirmDiscard = true else onDismiss() }, containerColor = MaterialTheme.colorScheme.surface, scrimColor = Color.Black.copy(alpha = 0.62f)) {
+        TrackGlassOverlay()
         val e = draft
         if (!loaded) { LoadingBox(); return@ModalBottomSheet }
         if (e == null) { EmptyState("Not found", "This title is no longer in your library."); return@ModalBottomSheet }

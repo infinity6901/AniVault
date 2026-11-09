@@ -46,6 +46,7 @@ import com.anivault.ui.common.*
 import com.anivault.ui.library.SwipeableLibraryRow
 import com.anivault.ui.theme.AniVaultColors
 import com.anivault.ui.theme.dim
+import com.anivault.ui.theme.TrackGlassOverlay
 
 private fun progressText(e: HVaultEntry) = if (e.totalEpisodes > 0) "Ep ${e.watchedEpisodes} / ${e.totalEpisodes}" else "Ep ${e.watchedEpisodes} · total unknown"
 
@@ -90,6 +91,7 @@ fun VaultLibraryTab(entries: List<HVaultEntry>, vm: VaultViewModel) {
                 Box {
                     IconButton(onClick = { statusMenu = true }) { Icon(Icons.Default.Edit, "Change status") }
                     DropdownMenu(statusMenu, { statusMenu = false }) {
+                            if (statusMenu) TrackGlassOverlay()
                         WatchStatus.values().forEach { s -> DropdownMenuItem({ Text(s.label) }, onClick = { statusMenu = false; vm.setStatus(sel.toList(), s); selected = emptySet() }) }
                     }
                 }
@@ -110,6 +112,7 @@ fun VaultLibraryTab(entries: List<HVaultEntry>, vm: VaultViewModel) {
                     Box {
                         IconButton(onClick = { sortMenu = true }, Modifier.size(36.dp)) { Icon(Icons.Default.Sort, "Sort", Modifier.size(20.dp)) }
                         DropdownMenu(sortMenu, { sortMenu = false }) {
+                            if (sortMenu) TrackGlassOverlay()
                             VAULT_SORTS.forEach { s -> DropdownMenuItem({ Text(s.label, fontWeight = if (s == sort) FontWeight.Bold else FontWeight.Normal) }, onClick = { sortMenu = false; sort = s }) }
                         }
                     }
@@ -215,7 +218,8 @@ private fun VaultDetailSheet(original: HVaultEntry, vm: VaultViewModel, onDismis
     var confirmMove by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
     val dirty = e != original
-    ModalBottomSheet(onDismissRequest = { if (dirty) confirmDiscard = true else onDismiss() }, containerColor = MaterialTheme.colorScheme.surface) {
+    ModalBottomSheet(onDismissRequest = { if (dirty) confirmDiscard = true else onDismiss() }, containerColor = MaterialTheme.colorScheme.surface, scrimColor = Color.Black.copy(alpha = 0.62f)) {
+        TrackGlassOverlay()
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row {
                 Poster(e.imageUrl, Modifier.width(96.dp).height(138.dp), allowDiskCache = false)
