@@ -7,20 +7,41 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.anivault.data.local.dao.AnimeDao
 import com.anivault.data.local.dao.HVaultDao
+import com.anivault.data.local.dao.WatchHistoryDao
 import com.anivault.data.local.entity.AnimeEntry
 import com.anivault.data.local.entity.HVaultEntry
+import com.anivault.data.local.entity.WatchHistoryEntry
 
 @Database(
-    entities  = [AnimeEntry::class, HVaultEntry::class],
-    version   = 3,
+    entities  = [AnimeEntry::class, HVaultEntry::class, WatchHistoryEntry::class],
+    version   = 4,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun animeDao(): AnimeDao
     abstract fun hVaultDao(): HVaultDao
+    abstract fun watchHistoryDao(): WatchHistoryDao
 
     companion object {
+        /** v3 → v4: rewatch count, last-watched timestamp, and episode watch history table. */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE anime_entries ADD COLUMN rewatchCount INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE anime_entries ADD COLUMN lastWatchedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS watch_history (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "entryId TEXT NOT NULL, " +
+                        "title TEXT NOT NULL, " +
+                        "imageUrl TEXT NOT NULL, " +
+                        "episode INTEGER NOT NULL, " +
+                        "rewatchCount INTEGER NOT NULL, " +
+                        "watchedAt INTEGER NOT NULL)"
+                )
+            }
+        }
+
         /** v2 → v3: the user's own tags. Purely additive. */
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {

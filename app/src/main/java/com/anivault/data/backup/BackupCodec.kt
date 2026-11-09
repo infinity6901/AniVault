@@ -2,6 +2,7 @@ package com.anivault.data.backup
 
 import com.anivault.data.local.entity.AnimeEntry
 import com.anivault.data.local.entity.HVaultEntry
+import com.anivault.data.local.model.WatchStatus
 import com.google.gson.Gson
 import java.security.SecureRandom
 import javax.crypto.AEADBadTagException
@@ -78,9 +79,61 @@ object BackupCodec {
             throw BackupException("The backup could not be read.")
         } ?: throw BackupException("The backup is empty.")
         if (payload.version > 2) throw BackupException("This backup was made by a newer AniVault. Update the app first.")
-        // Gson bypasses Kotlin null-safety, so a hand-edited file may lack the list entirely.
+        // Gson bypasses Kotlin null-safety, so sanitize every deserialized entity and collection.
         val rows: List<AnimeEntry>? = payload.anime
-        return payload.copy(anime = (rows ?: emptyList()).filter { it.id.isNotBlank() && it.title.isNotBlank() })
+        val vaultRows: List<HVaultEntry>? = payload.hvault
+        return payload.copy(
+            anime = (rows ?: emptyList()).mapNotNull(::sanitizeAnime).distinctBy { it.id },
+            hvault = vaultRows?.mapNotNull(::sanitizeVault)?.distinctBy { it.id }
+        )
+    }
+
+    @Suppress("UselessCallOnNotNull")
+    private fun sanitizeAnime(e: AnimeEntry?): AnimeEntry? {
+        if (e == null || e.id.isNullOrBlank() || e.title.isNullOrBlank()) return null
+        val total = e.totalEpisodes.coerceAtLeast(0)
+        val watched = if (total > 0) e.watchedEpisodes.coerceIn(0, total) else e.watchedEpisodes.coerceAtLeast(0)
+        return e.copy(
+            id = e.id.trim(),
+            title = e.title.trim(),
+            imageUrl = e.imageUrl.orEmpty(),
+            totalEpisodes = total,
+            watchedEpisodes = watched,
+            status = (e.status as WatchStatus?) ?: WatchStatus.PLAN_TO_WATCH,
+            rating = if (e.rating.isNaN()) 0f else e.rating.coerceIn(0f, 10f),
+            season = e.season.orEmpty(),
+            genres = (e.genres as List<String?>?)?.mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) } ?: emptyList(),
+            synopsis = e.synopsis.orEmpty(),
+            notes = e.notes.orEmpty(),
+            durationMinutes = e.durationMinutes.coerceAtLeast(0),
+            bannerUrl = e.bannerUrl.orEmpty(),
+            altTitles = (e.altTitles as List<String?>?)?.mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) } ?: emptyList(),
+            format = e.format.orEmpty(),
+            airingStatus = e.airingStatus.orEmpty(),
+            sourceName = e.sourceName.orEmpty(),
+            remoteIds = e.remoteIds.orEmpty(),
+            providerScore = if (e.providerScore.isNaN()) 0f else e.providerScore.coerceIn(0f, 10f),
+            tags = (e.tags as List<String?>?)?.mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) } ?: emptyList()
+        )
+    }
+
+    @Suppress("UselessCallOnNotNull")
+    private fun sanitizeVault(v: HVaultEntry?): HVaultEntry? {
+        if (v == null || v.id.isNullOrBlank() || v.title.isNullOrBlank()) return null
+        val total = v.totalEpisodes.coerceAtLeast(0)
+        val watched = if (total > 0) v.watchedEpisodes.coerceIn(0, total) else v.watchedEpisodes.coerceAtLeast(0)
+        return v.copy(
+            id = v.id.trim(),
+            title = v.title.trim(),
+            imageUrl = v.imageUrl.orEmpty(),
+            totalEpisodes = total,
+            watchedEpisodes = watched,
+            status = (v.status as WatchStatus?) ?: WatchStatus.PLAN_TO_WATCH,
+            rating = if (v.rating.isNaN()) 0f else v.rating.coerceIn(0f, 10f),
+            tags = (v.tags as List<String?>?)?.mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) } ?: emptyList(),
+            notes = v.notes.orEmpty(),
+            durationMinutes = v.durationMinutes.coerceAtLeast(0)
+        )
     }
 
     private fun startsWith(bytes: ByteArray, prefix: ByteArray): Boolean =

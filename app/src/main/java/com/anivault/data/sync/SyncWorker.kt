@@ -17,7 +17,7 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
     override suspend fun doWork(): Result {
         val sync = EntryPointAccessors.fromApplication(applicationContext, SyncEntryPoint::class.java).syncManager()
         val reports = sync.syncAll()
-        return if (reports.any { !it.ok && it.error?.contains("offline") == true }) Result.retry() else Result.success()
+        return if (reports.any { it.retryable || it.failedPushes > 0 }) Result.retry() else Result.success()
     }
 
     companion object {

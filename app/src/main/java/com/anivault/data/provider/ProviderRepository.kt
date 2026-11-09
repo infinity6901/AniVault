@@ -87,6 +87,22 @@ class ProviderRepository @Inject constructor(
         return toResult(outcome, filters)
     }
 
+    suspend fun browseSeason(year: Int, season: String, page: Int = 1, filters: SearchFilters = SearchFilters()): ProviderResult {
+        val s = season.uppercase()
+        val capable = store.enabled().filter { factory.create(it).sections.contains(BrowseSection.SEASONAL) }
+        val outcome = engine.run(
+            sources = capable,
+            autoFallback = store.autoFallback.value,
+            emptyIsFinal = !prefs.fallbackOnEmpty,
+            retries = prefs.networkRetries,
+            operation = "season:$year:${s.lowercase()}",
+            isEmpty = { r: PagedResult -> r.items.isEmpty() }
+        ) { src ->
+            cached("bs|${src.id}|$year|$s|$page") { factory.create(src).browseSeason(year, s, page) }
+        }
+        return toResult(outcome, filters)
+    }
+
     /** True when at least one enabled source can serve [section]. */
     fun supports(section: BrowseSection): Boolean =
         store.enabled().any { factory.create(it).sections.contains(section) }

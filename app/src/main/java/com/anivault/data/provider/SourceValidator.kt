@@ -51,22 +51,55 @@ object SourceValidator {
 
     /** Rejects loopback, link-local, private ranges and obviously local host names (no DNS lookups here). */
     fun isPrivateHost(host: String): Boolean {
-        val h = host.lowercase().trim('[', ']')
-        if (h == "localhost" || h.endsWith(".localhost") || h.endsWith(".local") ||
-            h.endsWith(".internal") || h.endsWith(".lan") || h.endsWith(".home.arpa") || !h.contains('.') && !h.contains(':')
+        val h = host.lowercase().trim('[', ']').trimEnd('.')
+        if (h.isEmpty() || h == "localhost" || h.endsWith(".localhost") || h.endsWith(".local") ||
+            h.endsWith(".internal") || h.endsWith(".lan") || h.endsWith(".home.arpa") || (!h.contains('.') && !h.contains(':'))
         ) return true
         val v4 = Regex("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$").matchEntire(h)
         if (v4 != null) {
             val o = v4.groupValues.drop(1).map { it.toInt() }
-            return o[0] == 10 || o[0] == 127 || o[0] == 0 ||
-                (o[0] == 169 && o[1] == 254) ||
-                (o[0] == 172 && o[1] in 16..31) ||
-                (o[0] == 192 && o[1] == 168) ||
-                (o[0] == 100 && o[1] in 64..127)
+            if (o.any { it > 255 }) return true
+            return isPrivateIpv4(o[0], o[1])
+        }
+        // Reject obfuscated numeric/hex IPv4 hostnames (e.g. 0x7f.0.0.1 or 127.1).
+        if (!h.contains(':') && h.split('.').all { part -> part.all { it.isDigit() } || part.startsWith("0x") }) {
+            return true
         }
         if (h.contains(':')) {
-            return h == "::1" || h == "::" || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe80")
+            if (h == "::1" || h == "::" || h == "0:0:0:0:0:0:0:1" || h == "0:0:0:0:0:0:0:0" ||
+                h.startsWith("fc") || h.startsWith("fd") ||
+                h.startsWith("fe8") || h.startsWith("fe9") || h.startsWith("fea") || h.startsWith("feb")
+            ) return true
+            // Check IPv4-mapped IPv6 in dotted form (e.g. ::ffff:127.0.0.1) or hex form (e.g. ::ffff:7f00:1)
+            val tail = h.substringAfterLast(':')
+            if (tail.contains('.')) {
+                val mappedV4 = Regex("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$").matchEntire(tail)
+                if (mappedV4 != null) {
+                    val o = mappedV4.groupValues.drop(1).map { it.toInt() }
+                    if (o.any { it > 255 } || isPrivateIpv4(o[0], o[1])) return true
+                }
+            } else if (h.contains("ffff:")) {
+                val afterFfff = h.substringAfter("ffff:")
+                val parts = afterFfff.split(':')
+                if (parts.size == 2) {
+                    val hi = parts[0].toIntOrNull(16)
+                    val lo = parts[1].toIntOrNull(16)
+                    if (hi != null && lo != null) {
+                        val o0 = (hi shr 8) and 0xff
+                        val o1 = hi and 0xff
+                        if (isPrivateIpv4(o0, o1)) return true
+                    }
+                }
+            }
         }
         return false
     }
+
+    private fun isPrivateIpv4(o0: Int, o1: Int): Boolean =
+        o0 == 10 || o0 == 127 || o0 == 0 ||
+            (o0 == 169 && o1 == 254) ||
+            (o0 == 172 && o1 in 16..31) ||
+            (o0 == 192 && o1 == 168) ||
+            (o0 == 100 && o1 in 64..127) ||
+            o0 >= 224
 }

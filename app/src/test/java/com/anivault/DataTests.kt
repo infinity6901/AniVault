@@ -12,19 +12,20 @@ import org.junit.Assert.*
 import org.junit.Test
 
 private fun entry(id: String, title: String = id, status: WatchStatus = WatchStatus.WATCHING, watched: Int = 0, total: Int = 12,
-                  updated: Long = 0, rating: Float = 0f, remote: String = "") =
-    AnimeEntry(id = id, title = title, status = status, watchedEpisodes = watched, totalEpisodes = total, updatedAt = updated, rating = rating, remoteIds = remote, year = 2020)
+                  updated: Long = 0, rating: Float = 0f, remote: String = "", notes: String = "") =
+    AnimeEntry(id = id, title = title, status = status, watchedEpisodes = watched, totalEpisodes = total, updatedAt = updated, rating = rating, remoteIds = remote, year = 2020, notes = notes)
 
-private fun remote(id: String, title: String, status: WatchStatus, progress: Int, updated: Long, score: Float = 0f) =
-    RemoteListEntry(id, null, status, progress, score, null, null, updated, NormalizedAnime("anilist", "AniList", id, title, year = 2020, episodes = 12))
+private fun remote(id: String, title: String, status: WatchStatus, progress: Int, updated: Long, score: Float = 0f, notes: String = "") =
+    RemoteListEntry(id, null, status, progress, score, null, null, updated, NormalizedAnime("anilist", "AniList", id, title, year = 2020, episodes = 12), notes = notes)
 
 class SyncPlannerTest {
     private val p = AccountProvider.ANILIST
     private val ids = RemoteIds.encode(mapOf("anilist" to "1"))
 
     @Test fun imports_unknown_remote() {
-        val plan = SyncPlanner.plan(p, emptyList(), listOf(remote("9", "New Show", WatchStatus.COMPLETED, 12, 5)), 0, ConflictPolicy.NEWEST)
+        val plan = SyncPlanner.plan(p, emptyList(), listOf(remote("9", "New Show", WatchStatus.COMPLETED, 12, 5, notes = "Masterpiece")), 0, ConflictPolicy.NEWEST)
         assertEquals(1, plan.imports.size); assertEquals(WatchStatus.COMPLETED, plan.imports[0].status)
+        assertEquals("Masterpiece", plan.imports[0].notes)
     }
     @Test fun remote_only_change_pulls() {
         val l = entry("a", "Show", watched = 3, updated = 100, remote = ids)
@@ -35,6 +36,12 @@ class SyncPlannerTest {
         val l = entry("a", "Show", watched = 6, updated = 500, remote = ids)
         val plan = SyncPlanner.plan(p, listOf(l), listOf(remote("1", "Show", WatchStatus.WATCHING, 5, 100)), 200, ConflictPolicy.NEWEST)
         assertEquals(1, plan.pushes.size); assertTrue(plan.pulls.isEmpty())
+    }
+    @Test fun local_notes_edit_triggers_push() {
+        val l = entry("a", "Show", watched = 5, updated = 500, remote = ids, notes = "My updated review")
+        val plan = SyncPlanner.plan(p, listOf(l), listOf(remote("1", "Show", WatchStatus.WATCHING, 5, 100, notes = "")), 200, ConflictPolicy.NEWEST)
+        assertEquals(1, plan.pushes.size)
+        assertEquals("My updated review", plan.pushes.single().notes)
     }
     @Test fun conflict_policies() {
         val l = entry("a", "Show", watched = 6, updated = 400, remote = ids)

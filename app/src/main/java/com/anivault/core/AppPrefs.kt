@@ -43,6 +43,44 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         get() = sp.getString(K_PALETTE, null) ?: if (sp.getBoolean(K_DYNAMIC, false)) "dynamic" else "anivault"
         set(v) = putString(K_PALETTE, v)
 
+    // ── Liquid Glass Customization ─────────────────────────────────────────
+    /** "aurora" | "crystal" | "sakura" | "emerald" | "amber" | "obsidian" */
+    var glassTint: String
+        get() = sp.getString(K_GLASS_TINT, "aurora") ?: "aurora"
+        set(v) = putString(K_GLASS_TINT, v)
+    /** Panel frosted opacity percentage (10..65). */
+    var glassOpacity: Int
+        get() = sp.getInt(K_GLASS_OPACITY, 24).coerceIn(10, 65)
+        set(v) = putInt(K_GLASS_OPACITY, v.coerceIn(10, 65))
+    /** Specular rim & refraction highlight intensity (0..100). */
+    var glassSpecular: Int
+        get() = sp.getInt(K_GLASS_SPECULAR, 78).coerceIn(0, 100)
+        set(v) = putInt(K_GLASS_SPECULAR, v.coerceIn(0, 100))
+    /** Backdrop Gaussian blur radius in dp (0..40). */
+    var glassBlur: Int
+        get() = sp.getInt(K_GLASS_BLUR, 22).coerceIn(0, 40)
+        set(v) = putInt(K_GLASS_BLUR, v.coerceIn(0, 40))
+    /** Animate floating refractive light orbs behind glass panels. */
+    var glassAnimated: Boolean
+        get() = sp.getBoolean(K_GLASS_ANIMATED, true)
+        set(v) = putBool(K_GLASS_ANIMATED, v)
+    /** Render bottom navigation bar as a floating Liquid Glass capsule dock. */
+    var glassFloatingNav: Boolean
+        get() = sp.getBoolean(K_GLASS_FLOATING_NAV, true)
+        set(v) = putBool(K_GLASS_FLOATING_NAV, v)
+    /** Render homescreen widgets with the Liquid Glass canvas engine. */
+    var widgetGlassEnabled: Boolean
+        get() = sp.getBoolean(K_WIDGET_GLASS, true)
+        set(v) = putBool(K_WIDGET_GLASS, v)
+    /** Homescreen widget glass opacity percentage (15..85). */
+    var widgetGlassOpacity: Int
+        get() = sp.getInt(K_WIDGET_GLASS_OPACITY, 42).coerceIn(15, 85)
+        set(v) = putInt(K_WIDGET_GLASS_OPACITY, v.coerceIn(15, 85))
+    /** Tint the Progress Widget's liquid glass glow with the current anime's cover art. */
+    var widgetGlassMatchCover: Boolean
+        get() = sp.getBoolean(K_WIDGET_GLASS_COVER, true)
+        set(v) = putBool(K_WIDGET_GLASS_COVER, v)
+
     // ── Library & tracking ─────────────────────────────────────────────────
     var confirmDelete: Boolean
         get() = sp.getBoolean(K_CONFIRM_DELETE, true)
@@ -68,6 +106,18 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
     var librarySort: String
         get() = sp.getString(K_LIB_SORT, "UPDATED") ?: "UPDATED"
         set(v) = putString(K_LIB_SORT, v)
+    /** "compact" (4-col) | "standard" (3-col) | "large" (2-col) */
+    var gridDensity: String
+        get() = sp.getString(K_GRID_DENSITY, "standard") ?: "standard"
+        set(v) = putString(K_GRID_DENSITY, v)
+    /** "none" | "rating" | "unwatched" */
+    var posterBadge: String
+        get() = sp.getString(K_POSTER_BADGE, "rating") ?: "rating"
+        set(v) = putString(K_POSTER_BADGE, v)
+    /** JSON array of pinned smart lists in LibraryScreen. */
+    var savedSmartLists: String
+        get() = sp.getString(K_SMART_LISTS, "") ?: ""
+        set(v) = putString(K_SMART_LISTS, v)
 
     // ── H-Vault ────────────────────────────────────────────────────────────
     var vaultAutoLock: Boolean
@@ -91,7 +141,6 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         set(v) = putBool(K_FALLBACK_EMPTY, v)
 
     // ── Sync ───────────────────────────────────────────────────────────────
-    /** "NEWEST" | "REMOTE" | "LOCAL" */
     /** Deleting a title here also deletes it on the connected accounts. */
     var deleteOnAccounts: Boolean
         get() = sp.getBoolean(K_DELETE_REMOTE, true)
@@ -136,6 +185,15 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         const val K_THEME = "theme"
         const val K_DYNAMIC = "dynamic_color"
         const val K_PALETTE = "palette"
+        const val K_GLASS_TINT = "glass_tint"
+        const val K_GLASS_OPACITY = "glass_opacity"
+        const val K_GLASS_SPECULAR = "glass_specular"
+        const val K_GLASS_BLUR = "glass_blur"
+        const val K_GLASS_ANIMATED = "glass_animated"
+        const val K_GLASS_FLOATING_NAV = "glass_floating_nav"
+        const val K_WIDGET_GLASS = "widget_glass_enabled"
+        const val K_WIDGET_GLASS_OPACITY = "widget_glass_opacity"
+        const val K_WIDGET_GLASS_COVER = "widget_glass_cover"
         const val K_CONFIRM_DELETE = "confirm_delete"
         const val K_DEFAULT_STATUS = "default_add_status"
         const val K_AUTO_COMPLETE = "auto_complete_on_last"
@@ -143,6 +201,9 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         const val K_SYNOPSIS = "show_synopsis"
         const val K_LIB_VIEW = "library_view"
         const val K_LIB_SORT = "library_sort"
+        const val K_GRID_DENSITY = "grid_density"
+        const val K_POSTER_BADGE = "poster_badge"
+        const val K_SMART_LISTS = "saved_smart_lists"
         const val K_VAULT_AUTOLOCK = "vault_auto_lock"
         const val K_VAULT_TIMEOUT = "vault_lock_timeout_s"
         const val K_NET_TIMEOUT = "net_timeout_s"
@@ -160,9 +221,24 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
 
         /** Keys included in (and restored from) encrypted backups. Nothing secret. */
         val BACKUP_KEYS = setOf(
-            K_THEME, K_DYNAMIC, K_PALETTE, K_CONFIRM_DELETE, K_DEFAULT_STATUS, K_AUTO_COMPLETE, K_PLUS_ONE,
-            K_SYNOPSIS, K_LIB_VIEW, K_LIB_SORT, K_NET_TIMEOUT, K_NET_RETRIES, K_FALLBACK_EMPTY,
+            K_THEME, K_DYNAMIC, K_PALETTE,
+            K_GLASS_TINT, K_GLASS_OPACITY, K_GLASS_SPECULAR, K_GLASS_BLUR, K_GLASS_ANIMATED, K_GLASS_FLOATING_NAV,
+            K_WIDGET_GLASS, K_WIDGET_GLASS_OPACITY, K_WIDGET_GLASS_COVER,
+            K_CONFIRM_DELETE, K_DEFAULT_STATUS, K_AUTO_COMPLETE, K_PLUS_ONE,
+            K_SYNOPSIS, K_LIB_VIEW, K_LIB_SORT, K_GRID_DENSITY, K_POSTER_BADGE, K_SMART_LISTS,
+            K_NET_TIMEOUT, K_NET_RETRIES, K_FALLBACK_EMPTY,
             K_CONFLICT, K_DELETE_REMOTE, K_MARK_VAULT, K_QUIET_START, K_QUIET_END
+        )
+
+        val BOOL_KEYS = setOf(
+            K_DYNAMIC, K_GLASS_ANIMATED, K_GLASS_FLOATING_NAV, K_WIDGET_GLASS, K_WIDGET_GLASS_COVER,
+            K_CONFIRM_DELETE, K_AUTO_COMPLETE, K_PLUS_ONE, K_SYNOPSIS, K_VAULT_AUTOLOCK,
+            K_FALLBACK_EMPTY, K_DELETE_REMOTE, K_MARK_VAULT, K_NOTIF, K_NOTIF_REMINDERS, K_NOTIF_AIRING, K_NOTIF_SYNC
+        )
+
+        val INT_KEYS = setOf(
+            K_GLASS_OPACITY, K_GLASS_SPECULAR, K_GLASS_BLUR, K_WIDGET_GLASS_OPACITY,
+            K_VAULT_TIMEOUT, K_NET_TIMEOUT, K_NET_RETRIES, K_QUIET_START, K_QUIET_END
         )
     }
 }

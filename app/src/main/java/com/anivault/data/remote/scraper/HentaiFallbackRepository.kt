@@ -16,13 +16,12 @@ import com.anivault.data.provider.ProviderRepository
 import com.anivault.data.provider.ProviderResult
 
 /**
- * Orchestrates H-Vault data retrieval across three [HentaiSource] backends:
+ * Orchestrates H-Vault data retrieval across the configured H-Vault API sources and three
+ * fallback [HentaiSource] backends:
  *
  *   1. **Primary**   — [HentaiScraperRepository]    (hanime.tv)
  *   2. **Fallback 1** — [WatchHentaiScraperRepository] (watchhentai.net)
  *   3. **Fallback 2** — [NhentaiApiRepository]        (nhentai.net JSON API)
- *
- * Search strategy: attempt each source in order until one returns ≥ 1 result.
  */
 @Singleton
 class HentaiFallbackRepository @Inject constructor(
@@ -41,28 +40,35 @@ class HentaiFallbackRepository @Inject constructor(
     fun observeByStatus(status: WatchStatus): Flow<List<HVaultEntry>> =
         hVaultDao.observeByStatus(status)
 
-    // ── Search with automatic three-tier fallback ──────────────────────────
+    // ── Search with automatic fallback ─────────────────────────────────────
 
     suspend fun search(query: String, page: Int = 1): SearchResult =
         withContext(Dispatchers.IO) {
             val failures = mutableListOf<String>()
             var answered = false
+            var firstAnsweredSource = ""
             // 1. The H-Vault API sources (Settings inside H-Vault): reliable APIs with uncensored covers.
             when (val r = vaultProviders.search(query, page)) {
                 is ProviderResult.Success -> {
                     answered = true
-                    if (r.items.isNotEmpty()) return@withContext SearchResult(r.items.map { it.toScraped("v-${r.source.id}") }, r.source.name, false)
+                    firstAnsweredSource = r.source.name
+                    if (r.items.isNotEmpty() || !prefs.fallbackOnEmpty) {
+                        return@withContext SearchResult(r.items.map { it.toScraped("v-${r.source.id}") }, r.source.name, false)
+                    }
                 }
                 is ProviderResult.Failed -> r.failures.forEach { failures += "${it.sourceName}: ${it.kind.label}" }
                 ProviderResult.NoSources -> failures += "No H-Vault API source is enabled"
             }
-            // 2. Scrapers, which sites often block with bot checks.
+            // 2. Scrapers, tried only when API sources failed or when fallbackOnEmpty is enabled.
             val scrapers: List<HentaiSource> = listOf(primary, fallback, nhentai)
             for (src in scrapers) {
                 try {
                     val results = src.search(query, page)
+                    if (!answered) firstAnsweredSource = src.sourceName
                     answered = true
-                    if (results.isNotEmpty()) return@withContext SearchResult(results, src.sourceName, true)
+                    if (results.isNotEmpty() || !prefs.fallbackOnEmpty) {
+                        return@withContext SearchResult(results, src.sourceName, true)
+                    }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
@@ -72,7 +78,7 @@ class HentaiFallbackRepository @Inject constructor(
             if (!answered) {
                 throw IllegalStateException("H-Vault search could not reach any source. ${failures.joinToString(" • ")}")
             }
-            SearchResult(emptyList(), scrapers.last().sourceName, false)
+            SearchResult(emptyList(), firstAnsweredSource.ifBlank { scrapers.last().sourceName }, false)
         }
 
     // ── Detail fetch (tries all sources) ──────────────────────────────────
@@ -130,6 +136,7 @@ class HentaiFallbackRepository @Inject constructor(
         val ids = com.anivault.data.sync.VaultOwnership.keysOfVaultId(id) + com.anivault.data.sync.VaultOwnership.keysOf(remoteOps.link(id))
         if (prefs.deleteOnAccounts) ids.forEach { k -> val (s, m) = k.split(":", limit = 2); remoteOps.enqueue(com.anivault.data.sync.RemoteOp(com.anivault.data.sync.OpType.DELETE, s, m)) }
         remoteOps.setLink(id, "")
+        remoteOps.setStash(id, null)
     }
 
     suspend fun getAll(): List<HVaultEntry> = withContext(Dispatchers.IO) {

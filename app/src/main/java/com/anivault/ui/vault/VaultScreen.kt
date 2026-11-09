@@ -178,6 +178,9 @@ private fun VaultContent(onBack: () -> Unit, vm: VaultViewModel) {
                 OutlinedTextField(
                     query, { query = it }, singleLine = true, placeholder = { Text("Search H-Vault sources") },
                     leadingIcon = { Icon(Icons.Default.Search, null) },
+                    trailingIcon = {
+                        if (query.isNotBlank()) IconButton(onClick = { vm.runSearch(query) }) { Icon(Icons.Default.ArrowForward, "Run search") }
+                    },
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
                     keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { vm.runSearch(query) }),
                     modifier = Modifier.fillMaxWidth().padding(16.dp), shape = RoundedCornerShape(14.dp)
@@ -192,7 +195,7 @@ private fun VaultContent(onBack: () -> Unit, vm: VaultViewModel) {
                         items(search.results, key = { it.id }) { r ->
                             AniCard(Modifier.fillMaxWidth()) {
                                 Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Poster(r.coverUrl, Modifier.width(56.dp).height(80.dp), RoundedCornerShape(8.dp))
+                                    Poster(r.coverUrl, Modifier.width(56.dp).height(80.dp), RoundedCornerShape(8.dp), allowDiskCache = false)
                                     Spacer(Modifier.width(12.dp))
                                     Text(r.title, Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis)
                                     if (r.id in owned) Icon(Icons.Default.Check, "Saved")

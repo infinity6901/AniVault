@@ -27,12 +27,17 @@ class KitsuAdapter(
             BrowseSection.TOP_RATED -> "$base/anime?sort=-averageRating&$paging&$safe"
             BrowseSection.SEASONAL -> {
                 val s = Seasons.current()
-                "$base/anime?filter[season]=${s.name.lowercase()}&filter[seasonYear]=${s.year}&sort=-userCount&$paging&$safe"
+                return browseSeason(s.year, s.name, page)
             }
             BrowseSection.RECENTLY_UPDATED ->
                 throw ProviderException(FailureKind.UNSUPPORTED, "${source.name} does not offer “${section.label}”")
         }
         return get(url)
+    }
+
+    override suspend fun browseSeason(year: Int, season: String, page: Int): PagedResult {
+        val paging = "page[limit]=$PAGE_SIZE&page[offset]=${offset(page)}"
+        return get("$base/anime?filter[season]=${season.lowercase()}&filter[seasonYear]=$year&sort=-userCount&$paging&$safe")
     }
 
     override suspend fun check() {

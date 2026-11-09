@@ -1,19 +1,27 @@
 package com.anivault
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -28,6 +36,7 @@ import com.anivault.core.VaultSession
 import com.anivault.data.local.model.WatchStatus
 import com.anivault.data.sync.AccountManager
 import com.anivault.data.sync.SyncWorker
+import com.anivault.ui.calendar.CalendarScreen
 import com.anivault.ui.detail.EntryDetailSheet
 import com.anivault.ui.discover.DiscoverScreen
 import com.anivault.ui.home.HomeScreen
@@ -35,8 +44,13 @@ import com.anivault.ui.library.LibraryScreen
 import com.anivault.ui.settings.*
 import com.anivault.ui.stats.StatsScreen
 import com.anivault.ui.theme.AniVaultTheme
+import com.anivault.ui.theme.LiquidGlassConfig
+import com.anivault.ui.theme.LocalLiquidGlass
+import com.anivault.ui.theme.Palette
+import com.anivault.ui.theme.liquidGlassPanel
 import com.anivault.ui.vault.VaultScreen
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -47,6 +61,7 @@ private object R_ {
     const val DISCOVER = "discover"
     const val SETTINGS = "settings"
     const val STATS = "stats"
+    const val CALENDAR = "calendar"
     const val CATEGORY = "settings/{category}"
     const val API = "settings/api"
     const val VAULT = "vault"
@@ -62,20 +77,30 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var accounts: AccountManager
     @Inject lateinit var vaultSession: VaultSession
 
+    private val deepLinkEntryId = MutableStateFlow<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         handleIntent(intent)
         setContent {
             var theme by remember { mutableStateOf(prefs.theme) }
-            var palette by remember { mutableStateOf(prefs.palette) }
+            var paletteKey by remember { mutableStateOf(prefs.palette) }
+            var pal = Palette.parse(paletteKey)
+            var glassCfg by remember { mutableStateOf(LiquidGlassConfig.fromPrefs(prefs, pal)) }
             // Own listener (strongly held for the lifetime of the composition) so a change always reaches the theme.
             DisposableEffect(Unit) {
-                val l = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> theme = prefs.theme; palette = prefs.palette }
+                val l = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+                    theme = prefs.theme
+                    paletteKey = prefs.palette
+                    val nextPal = Palette.parse(paletteKey)
+                    glassCfg = LiquidGlassConfig.fromPrefs(prefs, nextPal)
+                }
                 prefs.sp.registerOnSharedPreferenceChangeListener(l)
                 onDispose { prefs.sp.unregisterOnSharedPreferenceChangeListener(l) }
             }
-            AniVaultTheme(theme = theme, palette = com.anivault.ui.theme.Palette.parse(palette)) { AppRoot() }
+            pal = Palette.parse(paletteKey)
+            AniVaultTheme(theme = theme, palette = pal, liquidGlass = glassCfg) { AppRoot() }
         }
     }
 
@@ -93,9 +118,15 @@ class MainActivity : FragmentActivity() {
         com.anivault.widget.WidgetUpdater.refreshAll(this)
     }
 
-    /** OAuth redirect (anivault://auth/<provider>). */
+    /** Handles OAuth redirects (`anivault://auth/<provider>`) and widget/notification deep-links (`anivault://entry/<id>`). */
     private fun handleIntent(i: Intent?) {
         val data = i?.dataString ?: return
+        if (data.startsWith("anivault://entry/")) {
+            val id = Uri.decode(data.removePrefix("anivault://entry/")).takeIf { it.isNotBlank() }
+            if (id != null) deepLinkEntryId.value = id
+            i.data = null
+            return
+        }
         if (!data.startsWith("anivault://auth")) return
         lifecycleScope.launch {
             accounts.handleRedirect(data)?.let { Toast.makeText(this@MainActivity, it, Toast.LENGTH_LONG).show() }
@@ -118,17 +149,59 @@ class MainActivity : FragmentActivity() {
         val showBar = route in setOf(R_.HOME, R_.LIBRARY_ARG, R_.DISCOVER, R_.SETTINGS)
         var detailId by remember { mutableStateOf<String?>(null) }
         var catalogItem by remember { mutableStateOf<com.anivault.data.provider.NormalizedAnime?>(null) }
+        val linkedId by deepLinkEntryId.collectAsStateWithLifecycle()
+        val glass = LocalLiquidGlass.current
+
+        LaunchedEffect(linkedId) {
+            if (!linkedId.isNullOrBlank()) {
+                detailId = linkedId
+                deepLinkEntryId.value = null
+            }
+        }
 
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
-                if (showBar) NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                    tabs.forEach { t ->
-                        NavigationBarItem(
-                            selected = route == t.route, icon = { Icon(t.icon, null) }, label = { Text(t.label) },
-                            onClick = { goTab(nav, if (t.route == R_.LIBRARY_ARG) R_.library(null) else t.route) }
-                        )
+                if (showBar) {
+                    if (glass.enabled && glass.floatingNav) {
+                        val dockShape = RoundedCornerShape(28.dp)
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding()
+                                .padding(horizontal = 16.dp, vertical = 10.dp)
+                                .liquidGlassPanel(config = glass, shape = dockShape, cornerRadiusDp = 28f, elevated = true)
+                        ) {
+                            NavigationBar(
+                                containerColor = Color.Transparent,
+                                tonalElevation = 0.dp,
+                                windowInsets = WindowInsets(0, 0, 0, 0)
+                            ) {
+                                tabs.forEach { t ->
+                                    NavigationBarItem(
+                                        selected = route == t.route,
+                                        icon = { Icon(t.icon, null) },
+                                        label = { Text(t.label) },
+                                        colors = NavigationBarItemDefaults.colors(
+                                            indicatorColor = glass.tint.primary.copy(alpha = 0.24f),
+                                            selectedIconColor = glass.tint.primary,
+                                            selectedTextColor = glass.tint.primary
+                                        ),
+                                        onClick = { goTab(nav, if (t.route == R_.LIBRARY_ARG) R_.library(null) else t.route) }
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                            tabs.forEach { t ->
+                                NavigationBarItem(
+                                    selected = route == t.route, icon = { Icon(t.icon, null) }, label = { Text(t.label) },
+                                    onClick = { goTab(nav, if (t.route == R_.LIBRARY_ARG) R_.library(null) else t.route) }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -139,6 +212,7 @@ class MainActivity : FragmentActivity() {
                         onOpenLibrary = { s -> goTab(nav, R_.library(s)) },
                         onOpenDiscover = { goTab(nav, R_.DISCOVER) },
                         onOpenStats = { nav.navigate(R_.STATS) },
+                        onOpenCalendar = { nav.navigate(R_.CALENDAR) },
                         onOpenEntry = { detailId = it },
                         onOpenCatalog = { catalogItem = it }
                     )
@@ -148,8 +222,15 @@ class MainActivity : FragmentActivity() {
                 }
                 composable(R_.DISCOVER) { DiscoverScreen(onOpenSources = { nav.navigate(R_.API) }) }
                 composable(R_.STATS) { StatsScreen(onBack = { nav.popBackStack() }) }
+                composable(R_.CALENDAR) {
+                    CalendarScreen(
+                        onBack = { nav.popBackStack() },
+                        onOpenEntry = { detailId = it },
+                        onOpenCatalog = { catalogItem = it }
+                    )
+                }
                 composable(R_.SETTINGS) { SettingsHomeScreen(onOpen = { nav.navigate("settings/$it") }) }
-                composable(R_.API) { ApiSourcesScreen(onBack = { nav.popBackStack() }) }
+                composable(R_.API) { ApiSourcesScreen(onBack = { nav.navigateUp() }) }
                 composable(R_.VAULT) { VaultScreen(onBack = { nav.popBackStack() }) }
                 composable(R_.CATEGORY) { be ->
                     val back = { nav.popBackStack(); Unit }

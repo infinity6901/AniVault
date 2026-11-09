@@ -33,12 +33,14 @@ import androidx.lifecycle.viewModelScope
 import com.anivault.core.AppPrefs
 import com.anivault.data.library.LibraryRepository
 import com.anivault.data.local.entity.AnimeEntry
+import com.anivault.data.local.entity.WatchHistoryEntry
 import com.anivault.data.local.model.WatchStatus
 import com.anivault.data.provider.BrowseSection
 import com.anivault.data.provider.NormalizedAnime
 import com.anivault.data.provider.ProviderRepository
 import com.anivault.data.provider.ProviderResult
 import com.anivault.ui.common.*
+import com.anivault.ui.library.RandomPickerSheet
 import com.anivault.ui.theme.AniVaultColors
 import com.anivault.ui.theme.dim
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -50,6 +52,8 @@ data class HomeState(
     val total: Int = 0,
     val planned: Int = 0,
     val continueWatching: List<AnimeEntry> = emptyList(),
+    val allEntries: List<AnimeEntry> = emptyList(),
+    val recentHistory: List<WatchHistoryEntry> = emptyList(),
     val banners: List<NormalizedAnime> = emptyList(),
     val bannerLoading: Boolean = true,
     val showPlusOne: Boolean = true
@@ -78,9 +82,15 @@ class HomeViewModel @Inject constructor(
     private val bannerLoading = MutableStateFlow(true)
 
     val state: StateFlow<HomeState> = combine(
-        library.observeTotal(), library.observeCount(WatchStatus.PLAN_TO_WATCH),
-        library.observeContinueWatching(12), banner, bannerLoading
-    ) { total, planned, cont, b, loading -> HomeState(total, planned, cont, b, loading, prefs.showPlusOne) }
+        library.observeTotal(),
+        library.observeCount(WatchStatus.PLAN_TO_WATCH),
+        library.observeContinueWatching(12),
+        library.observeAll(),
+        library.observeRecentHistory(8)
+    ) { total, planned, cont, all, hist ->
+        HomeState(total = total, planned = planned, continueWatching = cont, allEntries = all, recentHistory = hist, showPlusOne = prefs.showPlusOne)
+    }.combine(banner) { st, b -> st.copy(banners = b) }
+        .combine(bannerLoading) { st, loading -> st.copy(bannerLoading = loading) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeState())
 
     init { loadBanner(); backfill.run(); loadAiring() }
@@ -96,6 +106,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun plusOne(id: String) { viewModelScope.launch { library.incrementProgress(id) } }
+    fun startWatching(id: String) { viewModelScope.launch { library.setStatus(listOf(id), WatchStatus.WATCHING) } }
 }
 
 @Composable
@@ -103,14 +114,29 @@ fun HomeScreen(
     onOpenLibrary: (WatchStatus?) -> Unit,
     onOpenDiscover: () -> Unit,
     onOpenStats: () -> Unit,
+    onOpenCalendar: () -> Unit = {},
     onOpenEntry: (String) -> Unit,
     onOpenCatalog: (NormalizedAnime) -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val s by viewModel.state.collectAsStateWithLifecycle()
     val airing by viewModel.airing.collectAsStateWithLifecycle()
+    var showWheel by remember { mutableStateOf(false) }
+
     LazyColumn(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        item { Text("AniVault", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground) }
+        item {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("AniVault", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.weight(1f))
+                if (s.allEntries.isNotEmpty()) {
+                    IconButton(onClick = { showWheel = true }) {
+                        Icon(Icons.Default.Casino, "Surprise me (Spin the Wheel)", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                IconButton(onClick = onOpenCalendar) {
+                    Icon(Icons.Default.CalendarMonth, "Airing Calendar", tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+        }
         item { BannerPager(s.banners, s.bannerLoading, onOpen = onOpenCatalog, onRetry = viewModel::loadBanner) }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -119,7 +145,7 @@ fun HomeScreen(
                     QuickCard(Icons.Default.Bookmark, "Watchlist", "${s.planned} planned", { onOpenLibrary(WatchStatus.PLAN_TO_WATCH) }, Modifier.weight(1f))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    QuickCard(Icons.Default.Explore, "Discover", "Find something new", onOpenDiscover, Modifier.weight(1f))
+                    QuickCard(Icons.Default.CalendarMonth, "Calendar", "Weekly schedule", onOpenCalendar, Modifier.weight(1f))
                     QuickCard(Icons.Default.BarChart, "Statistics", "Your progress", onOpenStats, Modifier.weight(1f))
                 }
             }
@@ -141,14 +167,38 @@ fun HomeScreen(
         }
         val now = System.currentTimeMillis()
         val week = airing.filter { it.airingAt in (now - 6 * 3_600_000L)..(now + 7 * 86_400_000L) }
-        if (week.isNotEmpty()) {
-            item { SectionHeader("This week") }
+        item { SectionHeader("This week", action = "Full Calendar", onAction = onOpenCalendar) }
+        if (week.isEmpty()) {
+            item {
+                AniCard(Modifier.fillMaxWidth(), onClick = onOpenCalendar) {
+                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.CalendarMonth, null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Open Weekly Airing Calendar", fontWeight = FontWeight.SemiBold)
+                            Text("See what airs each day across your library or the entire season.", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
+                        }
+                    }
+                }
+            }
+        } else {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     week.take(8).forEach { a -> AiringRow(a, now, onClick = { onOpenEntry(a.libraryId) }) }
                 }
             }
         }
+    }
+
+    if (showWheel) {
+        val genres = remember(s.allEntries) { s.allEntries.flatMap { it.genres }.filter { it.isNotBlank() }.distinct().sorted() }
+        RandomPickerSheet(
+            all = s.allEntries,
+            genres = genres,
+            onOpen = { showWheel = false; onOpenEntry(it.id) },
+            onStartWatching = { showWheel = false; viewModel.startWatching(it.id); onOpenEntry(it.id) },
+            onDismiss = { showWheel = false }
+        )
     }
 }
 

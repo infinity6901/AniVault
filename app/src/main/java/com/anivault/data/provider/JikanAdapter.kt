@@ -37,6 +37,11 @@ class JikanAdapter(
         return get(url)
     }
 
+    override suspend fun browseSeason(year: Int, season: String, page: Int): PagedResult {
+        val common = "page=$page&limit=$PAGE_SIZE&$SAFE"
+        return get("$base/seasons/$year/${season.lowercase()}?$common")
+    }
+
     override suspend fun check() {
         // get() validates the Jikan shape (a `data` list whose items have `title`).
         get("$base/anime?q=naruto&limit=1&$SAFE")

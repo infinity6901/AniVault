@@ -4,9 +4,11 @@ import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -15,12 +17,19 @@ import androidx.work.*
 import com.anivault.MainActivity
 import com.anivault.R
 import com.anivault.core.AppPrefs
+import com.anivault.data.library.ProgressRules
 import com.anivault.data.local.dao.AnimeDao
+import com.anivault.data.local.dao.WatchHistoryDao
+import com.anivault.data.local.entity.WatchHistoryEntry
 import com.anivault.data.local.model.WatchStatus
+import com.anivault.widget.WidgetUpdater
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
@@ -35,13 +44,21 @@ object QuietHours {
 
 @EntryPoint
 @InstallIn(SingletonComponent::class)
-interface NotifyEntryPoint { fun prefs(): AppPrefs; fun animeDao(): AnimeDao; fun airing(): com.anivault.data.provider.AiringRepository }
+interface NotifyEntryPoint {
+    fun prefs(): AppPrefs
+    fun animeDao(): AnimeDao
+    fun historyDao(): WatchHistoryDao
+    fun airing(): com.anivault.data.provider.AiringRepository
+}
 
 object Notifications {
     const val CHANNEL_REMINDERS = "reminders"
     private const val WORK = "anivault-reminder"
     private const val WORK_AIRING = "anivault-airing"
     const val CHANNEL_AIRING = "airing"
+    const val ACTION_MARK_WATCHED = "com.anivault.notify.MARK_WATCHED"
+    const val EXTRA_ENTRY_ID = "entry_id"
+    const val EXTRA_NOTIF_ID = "notif_id"
 
     fun createChannels(ctx: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -72,6 +89,46 @@ object Notifications {
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
             wm.enqueueUniquePeriodicWork(WORK_AIRING, ExistingPeriodicWorkPolicy.UPDATE, req)
         } else wm.cancelUniqueWork(WORK_AIRING)
+    }
+}
+
+/** Handles the "+1 Watched" action button directly from the notification shade without opening the app. */
+class EpisodeActionReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Notifications.ACTION_MARK_WATCHED) return
+        val entryId = intent.getStringExtra(Notifications.EXTRA_ENTRY_ID)?.takeIf { it.isNotBlank() } ?: return
+        val notifId = intent.getIntExtra(Notifications.EXTRA_NOTIF_ID, -1)
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val ep = EntryPointAccessors.fromApplication(context.applicationContext, NotifyEntryPoint::class.java)
+                val existing = ep.animeDao().getById(entryId)
+                if (existing != null) {
+                    val now = System.currentTimeMillis()
+                    val updated = ProgressRules.apply(existing, existing.watchedEpisodes + 1, ep.prefs().autoCompleteOnLast, now)
+                        .copy(pendingSync = true, updatedAt = now)
+                    ep.animeDao().upsert(updated)
+                    if (updated.watchedEpisodes > existing.watchedEpisodes) {
+                        ep.historyDao().insert(
+                            WatchHistoryEntry(
+                                entryId = updated.id,
+                                title = updated.title,
+                                imageUrl = updated.imageUrl,
+                                episode = updated.watchedEpisodes,
+                                rewatchCount = updated.rewatchCount,
+                                watchedAt = now
+                            )
+                        )
+                    }
+                    WidgetUpdater.refreshAll(context.applicationContext)
+                }
+                if (notifId >= 0) {
+                    runCatching { NotificationManagerCompat.from(context.applicationContext).cancel(notifId) }
+                }
+            } finally {
+                pending.finish()
+            }
+        }
     }
 }
 
@@ -110,7 +167,7 @@ class ReminderWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
 
 /**
  * Announces new episodes of shows being watched. Only the normal library is ever involved (H-Vault titles are not
- * looked up), and the lock-screen version of each notification is generic.
+ * looked up), and the lock-screen version of each notification is generic. Includes a "+1 Watched" action button.
  */
 class AiringWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     @android.annotation.SuppressLint("MissingPermission")
@@ -127,23 +184,39 @@ class AiringWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         val now = System.currentTimeMillis()
         val fresh = repo.items().filter { it.airingAt in (now - 12 * 3_600_000L)..now && !repo.wasNotified("${it.libraryId}:${it.episode}") }
         if (fresh.isEmpty()) return Result.success()
-        val open = PendingIntent.getActivity(
-            applicationContext, 0, Intent(applicationContext, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
         val publicVersion = NotificationCompat.Builder(applicationContext, Notifications.CHANNEL_AIRING)
             .setSmallIcon(R.mipmap.ic_launcher).setContentTitle("New episode available").build()
         fresh.take(5).forEachIndexed { i, item ->
+            val notifId = 2000 + i
+            val openIntent = Intent(applicationContext, MainActivity::class.java).apply {
+                action = Intent.ACTION_VIEW
+                data = Uri.parse("anivault://entry/${Uri.encode(item.libraryId)}")
+            }
+            val open = PendingIntent.getActivity(
+                applicationContext, notifId, openIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val markIntent = Intent(applicationContext, EpisodeActionReceiver::class.java).apply {
+                action = Notifications.ACTION_MARK_WATCHED
+                putExtra(Notifications.EXTRA_ENTRY_ID, item.libraryId)
+                putExtra(Notifications.EXTRA_NOTIF_ID, notifId)
+            }
+            val markPending = PendingIntent.getBroadcast(
+                applicationContext, 3000 + i, markIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
             val n = NotificationCompat.Builder(applicationContext, Notifications.CHANNEL_AIRING)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentTitle(item.title)
                 .setContentText("Episode ${item.episode} just aired")
                 .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setPublicVersion(publicVersion)
-                .setContentIntent(open).setAutoCancel(true).build()
-            runCatching { NotificationManagerCompat.from(applicationContext).notify(2000 + i, n) }
+                .setContentIntent(open)
+                .addAction(0, "+1 Watched", markPending)
+                .setAutoCancel(true).build()
+            runCatching { NotificationManagerCompat.from(applicationContext).notify(notifId, n) }
             repo.markNotified("${item.libraryId}:${item.episode}")
         }
-        fresh.drop(5).forEach { repo.markNotified("${it.libraryId}:${it.episode}") }
+        fresh.drop(5).forEach { repo.markNotified("${item.libraryId}:${item.episode}") }
         return Result.success()
     }
 }

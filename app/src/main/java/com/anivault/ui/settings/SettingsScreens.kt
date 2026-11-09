@@ -1,26 +1,27 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.anivault.ui.settings
 
 import android.Manifest
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.Alignment
-import androidx.compose.foundation.border
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -189,10 +190,32 @@ fun LibrarySettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewMo
 @Composable
 fun PlayerSettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
     var view by remember { mutableStateOf(vm.prefs.libraryView) }
+    var density by remember { mutableStateOf(vm.prefs.gridDensity) }
+    var badge by remember { mutableStateOf(vm.prefs.posterBadge) }
     CategoryScaffold("Reader / Player", onBack, vm) {
-        Note("AniVault is a tracker and catalog. It does not include a video player or stream content, so there are no playback settings here.")
+        Note("AniVault is a tracker and catalog. Customize how your library grid, poster badges, and list swipe gestures behave here.")
         GroupLabel("Library layout")
-        ChoiceGroup(listOf("grid" to "Poster grid", "list" to "Detailed list"), view, { view = it; vm.prefs.libraryView = it })
+        ChoiceGroup(listOf("grid" to "Poster grid", "list" to "Detailed list (with swipe gestures)"), view, { view = it; vm.prefs.libraryView = it })
+        GroupLabel("Poster grid density")
+        ChoiceGroup(
+            listOf(
+                "compact" to "Compact (4 columns)",
+                "standard" to "Standard (3 columns)",
+                "large" to "Large posters (2 columns)"
+            ),
+            density,
+            { density = it; vm.prefs.gridDensity = it }
+        )
+        GroupLabel("Poster corner badge")
+        ChoiceGroup(
+            listOf(
+                "rating" to "Personal rating (★ 9.0)",
+                "unwatched" to "Episodes remaining (e.g. 4 left)",
+                "none" to "No extra badge"
+            ),
+            badge,
+            { badge = it; vm.prefs.posterBadge = it }
+        )
     }
 }
 
@@ -200,19 +223,38 @@ fun PlayerSettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewMod
 
 @Composable
 fun AppearanceScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
+    val ctx = LocalContext.current
     var theme by remember { mutableStateOf(vm.prefs.theme) }
     var palette by remember { mutableStateOf(com.anivault.ui.theme.Palette.parse(vm.prefs.palette)) }
+    var glassTint by remember { mutableStateOf(com.anivault.ui.theme.LiquidGlassTint.parse(vm.prefs.glassTint)) }
+    var glassOpacity by remember { mutableStateOf(vm.prefs.glassOpacity) }
+    var glassSpecular by remember { mutableStateOf(vm.prefs.glassSpecular) }
+    var glassBlur by remember { mutableStateOf(vm.prefs.glassBlur) }
+    var glassAnimated by remember { mutableStateOf(vm.prefs.glassAnimated) }
+    var glassFloatingNav by remember { mutableStateOf(vm.prefs.glassFloatingNav) }
+    var widgetGlass by remember { mutableStateOf(vm.prefs.widgetGlassEnabled) }
+    var widgetGlassOpacity by remember { mutableStateOf(vm.prefs.widgetGlassOpacity) }
+    var widgetGlassCover by remember { mutableStateOf(vm.prefs.widgetGlassMatchCover) }
+
     val canDynamic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val isGlassSelected = palette == com.anivault.ui.theme.Palette.LIQUID_GLASS || palette == com.anivault.ui.theme.Palette.GLASS
+
     CategoryScaffold("Appearance", onBack, vm) {
         GroupLabel("Theme")
         ChoiceGroup(listOf("dark" to "Dark", "light" to "Light", "system" to "Follow system"), theme, { theme = it; vm.prefs.theme = it })
-        Note("Frosted glass and AMOLED black are always dark.")
+        Note("Liquid Glass, Frosted glass, AMOLED black, Cyberpunk Neon and Crimson Eclipse are always dark; Matcha Paper defaults to warm cream paper.")
         GroupLabel("Style")
         com.anivault.ui.theme.Palette.values().forEach { p ->
             val enabled = p != com.anivault.ui.theme.Palette.DYNAMIC || canDynamic
             val selected = p == palette
             androidx.compose.material3.Surface(
-                onClick = { if (enabled) { palette = p; vm.prefs.palette = p.key } },
+                onClick = {
+                    if (enabled) {
+                        palette = p
+                        vm.prefs.palette = p.key
+                        com.anivault.widget.WidgetUpdater.refreshAll(ctx)
+                    }
+                },
                 enabled = enabled, shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
                 color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surface,
                 border = androidx.compose.foundation.BorderStroke(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
@@ -229,6 +271,144 @@ fun AppearanceScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()
                     }
                     if (selected) Icon(Icons.Default.Check, "Selected", tint = MaterialTheme.colorScheme.primary)
                 }
+            }
+        }
+
+        GroupLabel("Liquid Glass Studio")
+        Note(
+            if (isGlassSelected) "Tune the refractive tint, frosted opacity, 3D specular rim, and living orb backdrop in real time."
+            else "Select “Liquid Glass” above to activate full-screen refractive glass, or customize the tint used by Liquid Glass homescreen widgets below."
+        )
+
+        val previewCfg = com.anivault.ui.theme.LiquidGlassConfig(
+            enabled = true,
+            tint = glassTint,
+            opacityPct = glassOpacity,
+            specularPct = glassSpecular,
+            blurDp = glassBlur,
+            animated = glassAnimated,
+            floatingNav = glassFloatingNav,
+            widgetEnabled = widgetGlass,
+            widgetOpacityPct = widgetGlassOpacity,
+            widgetMatchCover = widgetGlassCover
+        )
+
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp)
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(20.dp))
+                .background(
+                    androidx.compose.ui.graphics.Brush.linearGradient(
+                        listOf(glassTint.baseStart, glassTint.orb1.copy(alpha = 0.45f), glassTint.orb2.copy(alpha = 0.45f), glassTint.baseEnd)
+                    )
+                )
+                .padding(14.dp)
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .let { com.anivault.ui.theme.run { it.liquidGlassPanel(previewCfg, androidx.compose.foundation.shape.RoundedCornerShape(16.dp), 16f, elevated = true) } }
+                    .padding(14.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("LIQUID GLASS PREVIEW · ${glassTint.label.uppercase()}", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = glassTint.primary)
+                    Text("Refractive Specular Surface", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
+                    Text("Opacity $glassOpacity% · Specular Rim $glassSpecular% · Blur ${glassBlur}dp", fontSize = 12.sp, color = Color(0xFFD2E2F2))
+                }
+            }
+        }
+
+        Text("Refractive Tint Preset", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            com.anivault.ui.theme.LiquidGlassTint.values().forEach { t ->
+                FilterChip(
+                    selected = glassTint == t,
+                    onClick = {
+                        glassTint = t
+                        vm.prefs.glassTint = t.key
+                        com.anivault.widget.WidgetUpdater.refreshAll(ctx)
+                    },
+                    label = { Text(t.label) },
+                    leadingIcon = {
+                        Box(
+                            Modifier
+                                .size(14.dp)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(t.primary)
+                        )
+                    }
+                )
+            }
+        }
+
+        Text("Frosted Panel Opacity: $glassOpacity%", color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(top = 6.dp))
+        Slider(
+            value = glassOpacity.toFloat(),
+            onValueChange = { glassOpacity = it.toInt(); vm.prefs.glassOpacity = glassOpacity },
+            valueRange = 10f..65f
+        )
+
+        Text("3D Specular Rim & Caustic Highlight: $glassSpecular%", color = MaterialTheme.colorScheme.onSurface)
+        Slider(
+            value = glassSpecular.toFloat(),
+            onValueChange = { glassSpecular = it.toInt(); vm.prefs.glassSpecular = glassSpecular },
+            valueRange = 0f..100f,
+            onValueChangeFinished = { com.anivault.widget.WidgetUpdater.refreshAll(ctx) }
+        )
+
+        Text("Backdrop Orb Blur Radius: ${glassBlur} dp", color = MaterialTheme.colorScheme.onSurface)
+        Slider(
+            value = glassBlur.toFloat(),
+            onValueChange = { glassBlur = it.toInt(); vm.prefs.glassBlur = glassBlur },
+            valueRange = 0f..40f
+        )
+
+        SwitchRow(
+            title = "Animated liquid light orbs",
+            subtitle = "Slowly drifts refractive aurora orbs behind glass panels.",
+            checked = glassAnimated
+        ) { glassAnimated = it; vm.prefs.glassAnimated = it }
+
+        SwitchRow(
+            title = "Floating Liquid Glass capsule dock",
+            subtitle = "Lifts the bottom navigation bar into a floating refractive glass pill.",
+            checked = glassFloatingNav
+        ) { glassFloatingNav = it; vm.prefs.glassFloatingNav = it }
+
+        GroupLabel("Liquid Glass Homescreen Widgets")
+        Note("Applies a dynamically rendered 3D Liquid Glass surface with specular rims and radial light orbs to the Progress, Airing Next, and Library Stats widgets.")
+
+        SwitchRow(
+            title = "Enable Liquid Glass widgets",
+            subtitle = "Renders translucent frosted glass, caustic top highlights, and glowing orbs on all AniVault homescreen widgets.",
+            checked = widgetGlass
+        ) {
+            widgetGlass = it
+            vm.prefs.widgetGlassEnabled = it
+            com.anivault.widget.WidgetUpdater.refreshAll(ctx)
+        }
+
+        if (widgetGlass) {
+            Text("Widget Glass Opacity: $widgetGlassOpacity%", color = MaterialTheme.colorScheme.onSurface)
+            Slider(
+                value = widgetGlassOpacity.toFloat(),
+                onValueChange = { widgetGlassOpacity = it.toInt() },
+                valueRange = 15f..85f,
+                onValueChangeFinished = {
+                    vm.prefs.widgetGlassOpacity = widgetGlassOpacity
+                    com.anivault.widget.WidgetUpdater.refreshAll(ctx)
+                }
+            )
+
+            SwitchRow(
+                title = "Chameleon cover-art glow",
+                subtitle = "Extracts the vibrant colour from your currently watching anime cover to tint the Progress Widget's liquid glass orb and specular rim.",
+                checked = widgetGlassCover
+            ) {
+                widgetGlassCover = it
+                vm.prefs.widgetGlassMatchCover = it
+                com.anivault.widget.WidgetUpdater.refreshAll(ctx)
             }
         }
     }
@@ -261,17 +441,26 @@ fun BackupScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
         OutlinedButton(onClick = { open.launch(arrayOf("*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Restore from backup…") }
         if (canUndo) OutlinedButton(onClick = vm::undoRestore, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Undo last restore") }
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-        GroupLabel("Import from MyAnimeList")
-        Note("Export your list on myanimelist.net (Profile → Export), then pick the .xml or .xml.gz file here. Titles already in AniVault are skipped; covers and genres are filled in from AniList.")
+
+        GroupLabel("Import from MyAnimeList, CSV or JSON")
+        Note("Import a MyAnimeList export (.xml or .xml.gz), or an AniVault CSV / JSON file. Titles already in AniVault are skipped.")
         val importMal = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u -> if (u != null) vm.importMal(u) }
-        OutlinedButton(onClick = { importMal.launch(arrayOf("*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Import MAL export…") }
+        val importCsvJson = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u -> if (u != null) vm.importCsvOrJson(u) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = { importMal.launch(arrayOf("*/*")) }, enabled = !busy, modifier = Modifier.weight(1f)) { Text("Import MAL XML…") }
+            OutlinedButton(onClick = { importCsvJson.launch(arrayOf("*/*")) }, enabled = !busy, modifier = Modifier.weight(1f)) { Text("Import CSV / JSON…") }
+        }
+
         GroupLabel("Export your list")
-        Note("Readable copies of your anime library saved to Downloads. These are not encrypted.")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Note("Readable copies of your anime library saved to Downloads (not encrypted). MAL XML can be imported directly into MyAnimeList, AniList or Kitsu.")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             OutlinedButton(onClick = { vm.exportList("pdf") }, enabled = !busy) { Text("PDF") }
             OutlinedButton(onClick = { vm.exportList("docx") }, enabled = !busy) { Text("Word") }
             OutlinedButton(onClick = { vm.exportList("json") }, enabled = !busy) { Text("JSON") }
+            OutlinedButton(onClick = { vm.exportList("csv") }, enabled = !busy) { Text("CSV") }
+            OutlinedButton(onClick = { vm.exportList("mal_xml") }, enabled = !busy) { Text("MAL XML") }
         }
+
         GroupLabel("Export H-Vault")
         Note("Private entries with their covers. You must unlock with your fingerprint, face or screen lock first. The file is saved to Downloads and is not encrypted, so keep it somewhere safe.")
         val ctx = LocalContext.current
@@ -397,7 +586,7 @@ fun AdvancedScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) 
             else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !Notifications.hasPermission(ctx)) perm.launch(Manifest.permission.POST_NOTIFICATIONS)
             else { notif = true; p.notifEnabled = true; vm.applyNotifications() }
         }
-        SwitchRow("New episode alerts", "Tells you when a show you're watching has a new episode out (needs the show linked to AniList or MyAnimeList). The lock screen only says \"New episode available\".", airing, notif) { airing = it; p.notifAiring = it; vm.applyNotifications() }
+        SwitchRow("New episode alerts", "Tells you when a show you're watching has a new episode out (with a +1 Watched button on the notification).", airing, notif) { airing = it; p.notifAiring = it; vm.applyNotifications() }
         SwitchRow("Watch reminders", "A daily nudge when shows have sat untouched for a few days.", reminders, notif) { reminders = it; p.notifReminders = it; vm.applyNotifications() }
         if (notif) {
             Text("Quiet hours: ${"%02d".format(qs)}:00 – ${"%02d".format(qe)}:00", color = MaterialTheme.colorScheme.onSurface)

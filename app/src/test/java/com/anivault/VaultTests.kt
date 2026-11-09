@@ -44,6 +44,30 @@ class VaultTests {
         assertEquals(3, back.watchedEpisodes)
     }
 
+    @Test fun moveWithStashedMetadataPreservesAllFieldsAndMergesOnCollision() {
+        val orig = AnimeEntry(
+            id = "jikan:20", title = "Show", synopsis = "Full synopsis", year = 2023,
+            season = "Fall", format = "TV", bannerUrl = "https://img/b.jpg",
+            tags = listOf("fav"), genres = listOf("Drama"),
+            remoteIds = RemoteIds.encode(mapOf("mal" to "20")), watchedEpisodes = 2, totalEpisodes = 12
+        )
+        val vault = VaultMapping.toVault(orig, 1L).copy(watchedEpisodes = 7, rating = 8.5f, notes = "Vault note")
+        val restored = VaultMapping.toLibrary(vault, 2L, orig.remoteIds, stashed = orig)
+        assertEquals("jikan:20", restored.id)
+        assertEquals("Full synopsis", restored.synopsis)
+        assertEquals(2023, restored.year)
+        assertEquals(listOf("fav"), restored.tags)
+        assertEquals(7, restored.watchedEpisodes)
+        assertEquals(8.5f, restored.rating, 0.01f)
+        assertEquals("Vault note", restored.notes)
+
+        val collided = orig.copy(watchedEpisodes = 1, rating = 0f, notes = "Old note")
+        val merged = VaultMapping.mergeIntoLibrary(collided, restored, 3L)
+        assertEquals(7, merged.watchedEpisodes)
+        assertEquals(8.5f, merged.rating, 0.01f)
+        assertEquals("Vault note", merged.notes)
+    }
+
     @Test fun unlinkedEntryRoundTrips() {
         val e = AnimeEntry(id = "custom:1", title = "B")
         val vault = VaultMapping.toVault(e, 1L)

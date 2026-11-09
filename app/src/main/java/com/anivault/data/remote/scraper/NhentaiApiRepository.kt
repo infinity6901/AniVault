@@ -43,7 +43,7 @@ class NhentaiApiRepository @Inject constructor(
     override suspend fun fetchDetail(detailUrl: String): ScrapedEntry? =
         withContext(Dispatchers.IO) {
             runCatching {
-                val id   = detailUrl.trimEnd('/').substringAfterLast("/")
+                val id   = detailUrl.trimEnd('/').substringAfterLast("/").removePrefix("nhentai:")
                 val url  = "$BASE_URL/api/gallery/$id"
                 val body = fetch(url) ?: return@runCatching null
                 parseSingleEntry(JSONObject(body), detailUrl)
@@ -85,7 +85,8 @@ class NhentaiApiRepository @Inject constructor(
     }
 
     private fun parseSingleEntry(obj: JSONObject, knownDetailUrl: String? = null): ScrapedEntry {
-        val id      = obj.optInt("id", 0).toString()
+        val rawId   = obj.optInt("id", 0).toString()
+        val id      = "nhentai:$rawId"
         val mediaId = obj.optString("media_id", "")
 
         // Title: prefer English, fallback to Japanese
@@ -124,7 +125,7 @@ class NhentaiApiRepository @Inject constructor(
         }
 
         val numPages     = obj.optInt("num_pages", 1)
-        val detailUrl    = knownDetailUrl ?: "$BASE_URL/g/$id/"
+        val detailUrl    = knownDetailUrl ?: "$BASE_URL/g/$rawId/"
 
         return ScrapedEntry(
             id              = id,

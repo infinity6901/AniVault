@@ -132,8 +132,10 @@ class HentaiScraperRepository @Inject constructor(
             return fetchDocument(url, isRetry = true)
         }
 
-        val body = response.use { it.body?.string() }
-            ?: throw IOException("Empty response body from: $url")
+        val body = response.use {
+            if (!it.isSuccessful) throw IOException("HTTP ${it.code} from: $url")
+            it.body?.string()
+        } ?: throw IOException("Empty response body from: $url")
 
         return Jsoup.parse(body, url)
     }
@@ -144,7 +146,8 @@ class HentaiScraperRepository @Inject constructor(
                 val anchor = card.selectFirst(SEL_LINK) ?: return@runCatching null
                 val href   = anchor.attr("href").ensureLeadingSlash()
                 val detailUrl = "$BASE_URL$href"
-                val id        = href.trimEnd('/').substringAfterLast("/")
+                val rawSlug   = href.trimEnd('/').substringAfterLast("/").takeIf { it.isNotBlank() } ?: return@runCatching null
+                val id        = "hanime:$rawSlug"
 
                 val imgEl    = card.selectFirst(SEL_IMAGE)
                 val coverUrl = imgEl?.attr("data-src")?.ifBlank { null }
@@ -170,7 +173,8 @@ class HentaiScraperRepository @Inject constructor(
         }
 
     private fun parseDetailPage(doc: Document, detailUrl: String): ScrapedEntry {
-        val id     = detailUrl.trimEnd('/').substringAfterLast("/")
+        val rawSlug = detailUrl.trimEnd('/').substringAfterLast("/")
+        val id     = "hanime:$rawSlug"
         val title  = doc.selectFirst(SEL_D_TITLE)?.text()?.trim().orEmpty().ifBlank { "Unknown" }
 
         val imgEl  = doc.selectFirst(SEL_D_COVER)

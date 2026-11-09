@@ -101,7 +101,8 @@ object SyncPlanner {
             a.watchedEpisodes == b.watchedEpisodes &&
             abs(a.rating - b.rating) < 0.05f &&
             a.startDate == b.startDate &&
-            a.endDate == b.endDate
+            a.endDate == b.endDate &&
+            VaultOwnership.withMark(a.notes, false) == VaultOwnership.withMark(b.notes, false)
 
     /** [local] with the account's tracking fields applied (what a pull would produce). */
     fun applyRemote(local: AnimeEntry, r: RemoteListEntry, key: String): AnimeEntry {
@@ -110,12 +111,14 @@ object SyncPlanner {
             r.remoteEntryId?.let { put("${key}Entry", it) }
         }
         val stamp = if (r.updatedAt > 0) r.updatedAt else System.currentTimeMillis()
+        val notes = if (key == AccountProvider.MAL.key) local.notes else VaultOwnership.withMark(r.notes, false)
         return local.copy(
             status = r.status,
             watchedEpisodes = if (local.totalEpisodes > 0) r.progress.coerceAtMost(local.totalEpisodes) else r.progress,
             rating = r.score10.coerceIn(0f, 10f),
             startDate = r.startedAt,
             endDate = r.completedAt,
+            notes = notes,
             remoteIds = RemoteIds.merge(local.remoteIds, extra),
             remoteUpdatedAt = r.updatedAt,
             updatedAt = stamp,
@@ -144,6 +147,7 @@ object SyncPlanner {
             rating = r.score10.coerceIn(0f, 10f),
             startDate = r.startedAt,
             endDate = r.completedAt,
+            notes = VaultOwnership.withMark(r.notes, false),
             remoteIds = RemoteIds.merge(base.remoteIds, extra),
             remoteUpdatedAt = r.updatedAt,
             updatedAt = stamp,

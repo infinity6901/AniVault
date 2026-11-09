@@ -48,7 +48,13 @@ data class AnimeEntry(
 
     // ── v3 ────────────────────────────────────────────────────────────────
     /** The user's own labels (favourite, rewatch, …). Local only; included in backups. */
-    @ColumnInfo(defaultValue = "''") val tags: List<String> = emptyList()
+    @ColumnInfo(defaultValue = "''") val tags: List<String> = emptyList(),
+
+    // ── v4 ────────────────────────────────────────────────────────────────
+    /** Number of times the user has rewatched this title. */
+    @ColumnInfo(defaultValue = "0") val rewatchCount: Int = 0,
+    /** Epoch millis when an episode of this title was last marked watched. */
+    @ColumnInfo(defaultValue = "0") val lastWatchedAt: Long = 0L
 )
 
 /** Remote ids per service: keys "anilist", "mal", "kitsu", "kitsuEntry". Uses org.json (no reflection, R8-safe). */

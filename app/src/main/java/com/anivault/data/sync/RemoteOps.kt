@@ -1,7 +1,9 @@
 package com.anivault.data.sync
 
 import android.content.Context
+import com.anivault.data.local.entity.AnimeEntry
 import com.anivault.data.local.entity.RemoteIds
+import com.google.gson.Gson
 import dagger.hilt.android.qualifiers.ApplicationContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -38,10 +40,11 @@ object VaultOwnership {
     fun hasMark(notes: String?): Boolean = notes?.contains(VAULT_MARK) == true
 }
 
-/** Small persistent store: queued account operations, vault↔account links and the vault's own last-sync time. */
+/** Small persistent store: queued account operations, vault↔account links, stashed library metadata, and the vault's own last-sync time. */
 @Singleton
 class RemoteOps @Inject constructor(@ApplicationContext ctx: Context) {
     private val sp = ctx.getSharedPreferences("anivault_remote_ops", Context.MODE_PRIVATE)
+    private val gson = Gson()
 
     @Synchronized fun pending(service: String): List<RemoteOp> = readOps().filter { it.service == service }
 
@@ -82,6 +85,19 @@ class RemoteOps @Inject constructor(@ApplicationContext ctx: Context) {
     @Synchronized fun links(): Map<String, String> {
         val o = JSONObject(sp.getString("links", "{}") ?: "{}")
         return o.keys().asSequence().associateWith { o.optString(it) }
+    }
+
+    // ── vault stash: preserves original AnimeEntry metadata when moved to H-Vault and back ──
+    @Synchronized fun setStash(vaultId: String, entry: AnimeEntry?) {
+        val o = JSONObject(sp.getString("stash", "{}") ?: "{}")
+        if (entry == null) o.remove(vaultId) else o.put(vaultId, gson.toJson(entry))
+        sp.edit().putString("stash", o.toString()).apply()
+    }
+
+    @Synchronized fun stash(vaultId: String): AnimeEntry? {
+        val raw = JSONObject(sp.getString("stash", "{}") ?: "{}").optString(vaultId, "")
+        if (raw.isBlank()) return null
+        return runCatching { gson.fromJson(raw, AnimeEntry::class.java) }.getOrNull()
     }
 
     fun vaultLastSync(service: String): Long = sp.getLong("vault_last:$service", 0L)

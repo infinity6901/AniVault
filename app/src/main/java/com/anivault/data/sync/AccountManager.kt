@@ -71,13 +71,19 @@ class AccountManager @Inject constructor(
     fun authorizeUrl(p: AccountProvider): String? {
         val id = clientId(p)?.takeIf { it.isNotBlank() } ?: return null
         val enc = { s: String -> URLEncoder.encode(s, "UTF-8") }
+        val now = System.currentTimeMillis().toString()
         return when (p) {
-            AccountProvider.ANILIST ->
-                "https://anilist.co/api/v2/oauth/authorize?client_id=${enc(id)}&response_type=token"
+            AccountProvider.ANILIST -> {
+                val state = randomString(24)
+                secure.put("acct_pending:anilist", "$now:$state")
+                "https://anilist.co/api/v2/oauth/authorize?client_id=${enc(id)}&response_type=token&state=${enc(state)}"
+            }
             AccountProvider.MAL -> {
                 val verifier = randomString(64)
                 val state = randomString(24)
-                secure.put("acct_pkce:$state", verifier)
+                // Clean up any abandoned PKCE verifiers before storing the new one.
+                secure.removeWithPrefix("acct_pkce:")
+                secure.put("acct_pkce:$state", "$now:$verifier")
                 "https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=${enc(id)}" +
                     "&code_challenge=${enc(verifier)}&code_challenge_method=plain&state=${enc(state)}" +
                     "&redirect_uri=${enc(p.redirectUri)}"
@@ -94,22 +100,44 @@ class AccountManager @Inject constructor(
         return try {
             when (p) {
                 AccountProvider.ANILIST -> {
+                    val pending = secure.get("acct_pending:anilist")
+                    secure.remove("acct_pending:anilist")
+                    val parts = pending?.split(':', limit = 2)
+                    val issuedAt = parts?.getOrNull(0)?.toLongOrNull() ?: 0L
+                    val expectedState = parts?.getOrNull(1)
+                    if (pending == null || System.currentTimeMillis() - issuedAt !in 0..AUTH_TTL_MS) {
+                        throw ProviderException(FailureKind.AUTH, "Sign-in session expired or was not started from AniVault. Try again.")
+                    }
                     val frag = uri.fragment.orEmpty()
-                    val token = frag.split('&').map { it.split('=', limit = 2) }
-                        .firstOrNull { it[0] == "access_token" && it.size == 2 }?.get(1)
+                    val params = frag.split('&').mapNotNull {
+                        val kv = it.split('=', limit = 2)
+                        if (kv.size == 2) kv[0] to kv[1] else null
+                    }.toMap()
+                    val returnedState = params["state"] ?: uri.getQueryParameter("state")
+                    if (returnedState != null && expectedState != null && returnedState != expectedState) {
+                        throw ProviderException(FailureKind.AUTH, "Sign-in response did not match this request. Try again.")
+                    }
+                    val token = params["access_token"]?.takeIf { it.isNotBlank() }
                         ?: throw ProviderException(FailureKind.AUTH, "AniList did not return a sign-in token")
-                    val expiresIn = frag.split('&').map { it.split('=', limit = 2) }
-                        .firstOrNull { it[0] == "expires_in" && it.size == 2 }?.get(1)?.toLongOrNull()
+                    val expiresIn = params["expires_in"]?.toLongOrNull()
                     finishSignIn(p, token, null, expiresIn)
                 }
                 AccountProvider.MAL -> {
                     val error = uri.getQueryParameter("error")
-                    if (error != null) throw ProviderException(FailureKind.AUTH, "MyAnimeList sign-in was cancelled or refused")
+                    if (error != null) {
+                        secure.removeWithPrefix("acct_pkce:")
+                        throw ProviderException(FailureKind.AUTH, "MyAnimeList sign-in was cancelled or refused")
+                    }
                     val code = uri.getQueryParameter("code")
                     val state = uri.getQueryParameter("state").orEmpty()
-                    val verifier = secure.get("acct_pkce:$state")
-                    secure.remove("acct_pkce:$state")
-                    if (code.isNullOrBlank() || verifier == null) throw ProviderException(FailureKind.AUTH, "Sign-in response did not match this request. Try again.")
+                    val stored = if (state.isNotBlank()) secure.get("acct_pkce:$state") else null
+                    secure.removeWithPrefix("acct_pkce:")
+                    val parts = stored?.split(':', limit = 2)
+                    val issuedAt = parts?.getOrNull(0)?.toLongOrNull() ?: 0L
+                    val verifier = parts?.getOrNull(1)
+                    if (code.isNullOrBlank() || verifier.isNullOrBlank() || System.currentTimeMillis() - issuedAt !in 0..AUTH_TTL_MS) {
+                        throw ProviderException(FailureKind.AUTH, "Sign-in response did not match this request or expired. Try again.")
+                    }
                     val res = transport.execute(
                         HttpRequestSpec(
                             "https://myanimelist.net/v1/oauth2/token", "POST", mapOf("Accept" to "application/json"),
@@ -303,6 +331,7 @@ class AccountManager @Inject constructor(
     }
 
     private companion object {
+        const val AUTH_TTL_MS = 10 * 60_000L
         val SECRET_PREFIXES = listOf("acct_token:", "acct_refresh:", "acct_expires:", "acct_client:", "mal_client_id:")
     }
 }

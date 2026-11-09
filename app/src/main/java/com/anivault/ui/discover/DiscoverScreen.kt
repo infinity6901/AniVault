@@ -1,5 +1,6 @@
 package com.anivault.ui.discover
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import com.anivault.ui.common.CompactSearch
 import com.anivault.ui.common.ScrollToTop
@@ -16,6 +17,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -34,7 +38,10 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 import javax.inject.Inject
+
+private val ARCHIVE_SEASONS = listOf("WINTER" to "Winter", "SPRING" to "Spring", "SUMMER" to "Summer", "FALL" to "Fall")
 
 enum class DiscoverSort(val label: String) {
     DEFAULT("Default order"), SCORE("Highest score"), NEWEST("Newest first"), OLDEST("Oldest first"), TITLE("Title A–Z"), EPISODES("Most episodes");
@@ -62,6 +69,8 @@ data class DiscoverUi(
     val query: String = "",
     val section: BrowseSection = BrowseSection.TRENDING,
     val sections: List<BrowseSection> = emptyList(),
+    val seasonYear: Int = Seasons.current().year,
+    val seasonName: String = Seasons.current().name,
     val items: List<NormalizedAnime> = emptyList(),
     val status: DiscoverStatus = DiscoverStatus.Loading,
     val hasNext: Boolean = false,
@@ -87,6 +96,7 @@ class DiscoverViewModel @Inject constructor(
     private val queryFlow = MutableStateFlow("")
     private var job: Job? = null
     private var page = 1
+    private var activeSourceId: String? = null
 
     init {
         // Keep "In library" markers live.
@@ -107,6 +117,15 @@ class DiscoverViewModel @Inject constructor(
 
     fun onQuery(q: String) { _ui.update { it.copy(query = q) }; queryFlow.value = q }
     fun setSection(s: BrowseSection) { _ui.update { it.copy(section = s) }; reload() }
+    fun setSeasonArchive(year: Int, season: String) {
+        val maxYear = LocalDate.now().year + 1
+        _ui.update { it.copy(seasonYear = year.coerceIn(1970, maxYear), seasonName = season.uppercase()) }
+        reload()
+    }
+    fun resetToCurrentSeason() {
+        val cur = Seasons.current()
+        setSeasonArchive(cur.year, cur.name)
+    }
     fun setFilters(f: SearchFilters) { _ui.update { it.copy(filters = f) }; reload() }
     fun setSort(o: DiscoverSort) { _ui.update { it.copy(sort = o) } }
     fun retry() = reload()
@@ -133,11 +152,14 @@ class DiscoverViewModel @Inject constructor(
         job = viewModelScope.launch {
             val u0 = _ui.value
             val q = u0.query.trim()
-            if (reset) { page = 1; _ui.update { it.copy(status = DiscoverStatus.Loading, items = emptyList(), hasNext = false) } }
-            else _ui.update { it.copy(loadingMore = true) }
+            if (reset) {
+                page = 1
+                activeSourceId = null
+                _ui.update { it.copy(status = DiscoverStatus.Loading, items = emptyList(), hasNext = false) }
+            } else {
+                _ui.update { it.copy(loadingMore = true) }
+            }
             var target = if (reset) 1 else page + 1
-            // Filters are applied to each fetched page, so a narrow filter (one genre) can leave a page nearly
-            // empty. Keep pulling pages until the list is reasonably full or the source runs out.
             val filtered = u0.filters.activeCount > 0
             var pulls = 0
             var acc = if (reset) emptyList() else _ui.value.items
@@ -147,10 +169,19 @@ class DiscoverViewModel @Inject constructor(
                     q.length in 1..1 -> { _ui.update { it.copy(status = DiscoverStatus.Idle) }; return@launch }
                     q.isNotEmpty() -> providers.search(q, target, u0.filters)
                     u0.sections.isEmpty() -> ProviderResult.NoSources
+                    u0.section == BrowseSection.SEASONAL -> providers.browseSeason(u0.seasonYear, u0.seasonName, target, u0.filters)
                     else -> providers.browse(u0.section, target, u0.filters)
                 }
                 pulls++
                 if (result is ProviderResult.Success) {
+                    if (activeSourceId != null && activeSourceId != result.source.id) {
+                        activeSourceId = result.source.id
+                        if (target > 1) {
+                            target = 1
+                            continue
+                        }
+                    }
+                    activeSourceId = result.source.id
                     page = target
                     acc = TitleMatcher.dedupe(acc + result.items)
                     if (filtered && result.hasNext && acc.size < 20 && pulls < 12) { target++; continue }
@@ -171,7 +202,6 @@ class DiscoverViewModel @Inject constructor(
                     }
                 }
                 is ProviderResult.Failed -> _ui.update { u ->
-                    // A failed "load more" keeps what is on screen and says so.
                     if (reset) u.copy(status = DiscoverStatus.Error(res.failures), loadingMore = false)
                     else u.copy(loadingMore = false, message = "Couldn't load more results")
                 }
@@ -227,6 +257,14 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
                         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(ui.sections) { s -> FilterChip(ui.section == s, { viewModel.setSection(s) }, { Text(s.label, fontSize = 13.sp) }) }
                         }
+                        if (ui.section == BrowseSection.SEASONAL) {
+                            SeasonArchiveBar(
+                                year = ui.seasonYear,
+                                season = ui.seasonName,
+                                onSelect = viewModel::setSeasonArchive,
+                                onReset = viewModel::resetToCurrentSeason
+                            )
+                        }
                     }
                     val note = buildString {
                         ui.servedBy?.let { if (ui.status == DiscoverStatus.Content) append("Results from $it") }
@@ -246,7 +284,6 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
                     detail = st.failures.joinToString("\n") { "${it.sourceName}: ${it.kind.label}" }
                 )
                 DiscoverStatus.Content -> LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // The search box and chips are the first list item, so they scroll away with the results.
                     item(key = "header") { header() }
                     items(sortedItems, key = { it.canonicalId }) { a -> Box(Modifier.padding(horizontal = 16.dp)) { ResultRow(a, a.canonicalId in ui.inLibrary) { detail = a } } }
                     if (ui.loadingMore) item { LoadingBox() }
@@ -262,6 +299,39 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
         CatalogSheet(a, a.canonicalId in ui.inLibrary, onAdd = { st -> viewModel.add(a, st); detail = null }, onDismiss = { detail = null })
     }
     if (showFilters) DiscoverFilters(ui.filters, onApply = { viewModel.setFilters(it); showFilters = false }, onDismiss = { showFilters = false })
+}
+
+@Composable
+private fun SeasonArchiveBar(
+    year: Int,
+    season: String,
+    onSelect: (Int, String) -> Unit,
+    onReset: () -> Unit
+) {
+    val cur = remember { Seasons.current() }
+    val isCurrent = year == cur.year && season.equals(cur.name, ignoreCase = true)
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            IconButton(onClick = { onSelect(year - 1, season) }, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.ChevronLeft, "Previous year")
+            }
+            Text("$year", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            IconButton(onClick = { onSelect(year + 1, season) }, enabled = year <= cur.year, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.ChevronRight, "Next year")
+            }
+            Spacer(Modifier.width(4.dp))
+            ARCHIVE_SEASONS.forEach { (key, label) ->
+                FilterChip(
+                    selected = season.equals(key, ignoreCase = true),
+                    onClick = { onSelect(year, key) },
+                    label = { Text(label, fontSize = 12.sp) }
+                )
+            }
+            if (!isCurrent) {
+                TextButton(onClick = onReset) { Text("Now", fontSize = 12.sp) }
+            }
+        }
+    }
 }
 
 @Composable
@@ -289,29 +359,37 @@ private fun ResultRow(a: NormalizedAnime, inLibrary: Boolean, onClick: () -> Uni
 
 @Composable
 fun CatalogSheet(a: NormalizedAnime, inLibrary: Boolean, onAdd: (WatchStatus?) -> Unit, onDismiss: () -> Unit) {
+    val accent = rememberCoverAccent(a.coverUrl, MaterialTheme.colorScheme.primary)
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row {
-                Poster(a.coverUrl, Modifier.width(100.dp).height(144.dp))
-                Spacer(Modifier.width(14.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(a.title, fontWeight = FontWeight.Bold, fontSize = 19.sp)
-                    a.altTitles.firstOrNull()?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.dim) }
-                    Text(
-                        listOfNotNull(a.format.takeIf { it.isNotBlank() }, a.year?.toString(), if (a.episodes > 0) "${a.episodes} episodes" else "Episodes unknown", a.status.takeIf { it.isNotBlank() }).joinToString(" · "),
-                        fontSize = 13.sp, color = MaterialTheme.colorScheme.dim
-                    )
-                    a.score?.let { Text("Community score ★ ${"%.1f".format(it)}", fontSize = 13.sp) }
-                    Text("Data from ${a.providerName}", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
+            Box(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Brush.verticalGradient(listOf(accent.copy(alpha = 0.24f), Color.Transparent)))
+                    .padding(12.dp)
+            ) {
+                Row {
+                    Poster(a.coverUrl, Modifier.width(100.dp).height(144.dp))
+                    Spacer(Modifier.width(14.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(a.title, fontWeight = FontWeight.Bold, fontSize = 19.sp)
+                        a.altTitles.firstOrNull()?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.dim) }
+                        Text(
+                            listOfNotNull(a.format.takeIf { it.isNotBlank() }, a.year?.toString(), if (a.episodes > 0) "${a.episodes} episodes" else "Episodes unknown", a.status.takeIf { it.isNotBlank() }).joinToString(" · "),
+                            fontSize = 13.sp, color = MaterialTheme.colorScheme.dim
+                        )
+                        a.score?.let { Text("Community score ★ ${"%.1f".format(it)}", fontSize = 13.sp) }
+                        Text("Data from ${a.providerName}", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
+                    }
                 }
             }
-            if (a.genres.isNotEmpty()) Text(a.genres.joinToString(" · "), fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+            if (a.genres.isNotEmpty()) Text(a.genres.joinToString(" · "), fontSize = 13.sp, color = accent)
             Text(a.synopsis.ifBlank { "No synopsis available." }, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
             if (a.remoteIds.isNotEmpty()) com.anivault.ui.detail.RelatedRow(a.remoteIds)
             if (inLibrary) {
                 AssistChip(onClick = {}, label = { Text("Already in your library") }, leadingIcon = { Icon(Icons.Default.Check, null) })
             } else {
-                Button(onClick = { onAdd(null) }, Modifier.fillMaxWidth()) { Text("Add to library") }
+                Button(onClick = { onAdd(null) }, Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = accent)) { Text("Add to library") }
                 Text("Add as…", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(WatchStatus.values().toList()) { s -> AssistChip(onClick = { onAdd(s) }, label = { Text(s.label) }) }

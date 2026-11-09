@@ -10,7 +10,7 @@ import javax.inject.Singleton
 
 /**
  * Launches an invisible WebView on the Main thread to resolve Cloudflare's
- * IUAM / Turnstile JS challenge.  Once the page title is no longer the
+ * IUAM / Turnstile JS challenge. Once the page title is no longer the
  * Cloudflare interstitial, the cf_clearance cookie and the exact User-Agent
  * used during verification are captured and returned.
  *
@@ -41,6 +41,9 @@ class CloudflareBypassManager @Inject constructor(
      */
     suspend fun obtainClearance(url: String): ClearanceResult =
         withContext(Dispatchers.Main) {
+            if (!url.startsWith("https://", ignoreCase = true)) {
+                throw CloudflareBypassException("Refusing non-HTTPS URL for Cloudflare challenge")
+            }
             val deferred = CompletableDeferred<ClearanceResult>()
 
             val cookieManager = CookieManager.getInstance().apply {
@@ -54,8 +57,10 @@ class CloudflareBypassManager @Inject constructor(
                     domStorageEnabled    = true
                     useWideViewPort      = true
                     loadWithOverviewMode = true
-                    // Keep the default system Chrome UA – Cloudflare validates it
-                    mixedContentMode     = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    allowFileAccess      = false
+                    allowContentAccess   = false
+                    // Disallow mixed HTTP content inside HTTPS pages
+                    mixedContentMode     = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     blockNetworkImage    = false
                 }
 
@@ -114,7 +119,7 @@ class CloudflareBypassManager @Inject constructor(
             val watchdog = CoroutineScope(Dispatchers.Main).launch {
                 delay(TIMEOUT_MS)
                 if (!deferred.isCompleted) {
-                    webView.destroy()
+                    runCatching { webView.stopLoading(); webView.destroy() }
                     deferred.completeExceptionally(
                         CloudflareBypassException("Timed out after ${TIMEOUT_MS / 1000}s waiting for CF clearance")
                     )
@@ -124,11 +129,11 @@ class CloudflareBypassManager @Inject constructor(
             try {
                 deferred.await().also {
                     watchdog.cancel()
-                    webView.destroy()
+                    runCatching { webView.stopLoading(); webView.destroy() }
                 }
             } catch (e: Exception) {
                 watchdog.cancel()
-                runCatching { webView.destroy() }
+                runCatching { webView.stopLoading(); webView.destroy() }
                 throw e
             }
         }

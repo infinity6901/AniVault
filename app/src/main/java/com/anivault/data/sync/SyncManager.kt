@@ -35,10 +35,15 @@ data class SyncReport(
     val deletedOnAccount: Int = 0,
     val vaultMode: Boolean = false,
     val error: String? = null,
+    /** True when transient network/rate-limit/push failures occurred and WorkManager should retry. */
+    val retryable: Boolean = false,
+    /** IDs of local entries whose push failed during this run. */
+    val failedEntryIds: Set<String> = emptySet(),
     /** Human-readable lines for the sync log (titles added, updated, sent, failed). */
     val details: List<String> = emptyList()
 ) {
-    val ok: Boolean get() = error == null
+    /** A sync is only fully successful when there is no top-level error AND no individual push failed. */
+    val ok: Boolean get() = error == null && failedPushes == 0
     fun summary(): String =
         if (error != null) "${provider.label}: $error"
         else "${provider.label}${if (vaultMode) " (H-Vault)" else ""}: ${imported} added, ${pulled} updated here, ${pushed} sent" +
@@ -68,10 +73,12 @@ class SyncManager @Inject constructor(
         _running.value = true
         try {
             val started = System.currentTimeMillis()
-            val reports = accounts.connectedProviders().map { run(it, false) }
+            val providers = accounts.connectedProviders()
+            val reports = providers.map { run(it, false, multiProvider = providers.size > 1) }
+            val failedIds = reports.flatMap { it.failedEntryIds }.toSet()
             if (reports.isNotEmpty() && reports.all { it.ok }) {
                 // Everything that could be sent has been; don't leave never-matchable rows pending forever.
-                val ids = dao.getPendingSync().filter { it.updatedAt <= started }.map { it.id }
+                val ids = dao.getPendingSync().filter { it.updatedAt <= started && it.id !in failedIds }.map { it.id }
                 if (ids.isNotEmpty()) dao.clearPending(ids)
             }
             reports
@@ -80,16 +87,19 @@ class SyncManager @Inject constructor(
 
     suspend fun sync(provider: AccountProvider): SyncReport = mutex.withLock {
         _running.value = true
-        try { run(provider, false) } finally { _running.value = false }
+        try { run(provider, false, multiProvider = accounts.connectedProviders().size > 1) } finally { _running.value = false }
     }
 
     /** Two-way sync of the H-Vault entries that are linked to accounts. Only the (unlocked) H-Vault screen calls this. */
     suspend fun syncVault(): List<SyncReport> = mutex.withLock {
         _running.value = true
-        try { accounts.connectedProviders().map { run(it, true) } } finally { _running.value = false }
+        try {
+            val providers = accounts.connectedProviders()
+            providers.map { run(it, true, multiProvider = providers.size > 1) }
+        } finally { _running.value = false }
     }
 
-    private class OpsOutcome(val view: Map<String, RemoteListEntry>, val dropped: Set<String>, val unmarking: Set<String>, val deleted: Int)
+    private class OpsOutcome(val view: Map<String, RemoteListEntry>, val dropped: Set<String>, val unmarking: Set<String>, val deleted: Int, val hadFailures: Boolean)
 
     /** Carries out queued deletes / H-Vault tags for [p]. A rate limit or sign-in problem aborts the sync (the rest stays queued). */
     private suspend fun applyOps(p: AccountProvider, api: AccountApi, token: String, who: Identity, remoteAll: List<RemoteListEntry>, log: MutableList<String> = ArrayList()): OpsOutcome {
@@ -97,6 +107,7 @@ class SyncManager @Inject constructor(
         val dropped = HashSet<String>()
         val unmarking = HashSet<String>()
         var deleted = 0
+        var hadFailures = false
         for (op in remoteOps.pending(p.key)) {
             val r = view[op.mediaId]
             try {
@@ -123,15 +134,16 @@ class SyncManager @Inject constructor(
                 throw e
             } catch (e: ProviderException) {
                 if (e.kind == FailureKind.AUTH || e.kind == FailureKind.RATE_LIMITED) throw e
+                hadFailures = true
                 log += "✗ ${op.type.name.lowercase()} failed for title ${op.mediaId}: ${Sanitizer.clean(e.message)}"
                 if (op.type == OpType.DELETE) dropped += op.mediaId
                 if (op.type == OpType.UNMARK) unmarking += "${p.key}:${op.mediaId}"
             }
         }
-        return OpsOutcome(view, dropped, unmarking, deleted)
+        return OpsOutcome(view, dropped, unmarking, deleted, hadFailures)
     }
 
-    private suspend fun run(p: AccountProvider, vaultMode: Boolean): SyncReport {
+    private suspend fun run(p: AccountProvider, vaultMode: Boolean, multiProvider: Boolean = false): SyncReport {
         val t0 = System.currentTimeMillis()
         val log = ArrayList<String>()
         return try {
@@ -151,6 +163,7 @@ class SyncManager @Inject constructor(
                 val key = p.key
                 var pushed = 0
                 var failed = 0
+                val failedIds = HashSet<String>()
                 var limited: ProviderException? = null
                 val report: SyncReport
 
@@ -169,58 +182,113 @@ class SyncManager @Inject constructor(
                     val byId = vaultNow.associateBy { it.id }
                     plan.pulls.forEach { pull ->
                         val v = byId[pull.updated.id] ?: return@forEach
-                        vaultDao.upsert(VaultRules.normalize(v.copy(status = pull.updated.status, watchedEpisodes = pull.updated.watchedEpisodes, rating = pull.updated.rating, updatedAt = pull.updated.updatedAt)))
+                        val stamped = if (multiProvider) maxOf(pull.updated.updatedAt, t0) else pull.updated.updatedAt
+                        vaultDao.upsert(
+                            VaultRules.normalize(
+                                v.copy(
+                                    status = pull.updated.status,
+                                    watchedEpisodes = pull.updated.watchedEpisodes,
+                                    rating = pull.updated.rating,
+                                    notes = if (p == AccountProvider.MAL) v.notes else pull.updated.notes,
+                                    updatedAt = stamped
+                                )
+                            )
+                        )
                     }
                     val notesByMedia = vaultRemote.associateBy { it.remoteMediaId }
                     val mark = prefs.markVaultOnAccounts
                     val items = plan.pushes.map { e ->
                         val mediaId = RemoteIds.parse(e.remoteIds)[key]
-                        val extra = if (mark) PushExtra(notes = VaultOwnership.withMark(notesByMedia[mediaId]?.notes.orEmpty(), true), private = true) else PushExtra()
+                        val baseNotes = e.notes.ifBlank { notesByMedia[mediaId]?.notes.orEmpty() }
+                        val extra = if (mark) {
+                            PushExtra(notes = VaultOwnership.withMark(baseNotes, true), private = true)
+                        } else if (p != AccountProvider.MAL) {
+                            PushExtra(notes = VaultOwnership.withMark(baseNotes, false))
+                        } else PushExtra()
                         PushItem(e, extra)
                     }
                     plan.pulls.forEach { log += "↓ Updated \"${it.updated.title}\" in H-Vault" }
                     for (out in api.pushMany(token, who, items)) {
-                        if (out.result != null) { pushed++; log += "↑ Sent \"${out.item.entry.title}\"" }
-                        else if (out.error?.kind == FailureKind.RATE_LIMITED) { limited = out.error; log += "⏸ Rate limited at \"${out.item.entry.title}\"" }
-                        else { failed++; log += "✗ \"${out.item.entry.title}\": ${Sanitizer.clean(out.error?.message)}" }
+                        val entry = out.item.entry
+                        if (out.result != null) {
+                            pushed++
+                            log += "↑ Sent \"${entry.title}\""
+                        } else if (out.error?.kind == FailureKind.RATE_LIMITED) {
+                            limited = out.error
+                            failedIds += entry.id
+                            log += "⏸ Rate limited at \"${entry.title}\""
+                        } else {
+                            failed++
+                            failedIds += entry.id
+                            log += "✗ \"${entry.title}\": ${Sanitizer.clean(out.error?.message)}"
+                        }
                     }
-                    if (limited == null) remoteOps.setVaultLastSync(key, t0)
-                    report = SyncReport(p, 0, plan.pulls.size, pushed, failed, plan.conflicts, plan.skippedUnmatched, toVault, o.deleted, true)
+                    if (limited == null && failed == 0 && !o.hadFailures) remoteOps.setVaultLastSync(key, t0)
+                    report = SyncReport(
+                        p, 0, plan.pulls.size, pushed, failed, plan.conflicts, plan.skippedUnmatched,
+                        toVault, o.deleted, vaultMode = true, retryable = failed > 0 || o.hadFailures, failedEntryIds = failedIds
+                    )
                 } else {
                     val last = accounts.lastSyncAt(p)
                     val plan = SyncPlanner.plan(p, libraryAll, libRemote, last, policy)
-                    val incoming = plan.imports + plan.pulls.map { it.updated }
+                    val incoming = (plan.imports + plan.pulls.map { it.updated }).map { e ->
+                        // When multiple accounts are connected, stamp pulled/imported rows at >= t0 so other accounts receive them too.
+                        if (multiProvider) e.copy(updatedAt = maxOf(e.updatedAt, t0), pendingSync = true) else e
+                    }
                     if (incoming.isNotEmpty()) dao.upsertAll(incoming)
                     plan.imports.forEach { log += "+ Added \"${it.title}\"" }
                     plan.pulls.forEach { log += "↓ Updated \"${it.updated.title}\" (${it.updated.watchedEpisodes}/${it.updated.totalEpisodes}, ${it.updated.status.label})" }
                     val byId = plan.pushes.associateBy { it.id }
-                    for (out in api.pushMany(token, who, plan.pushes.map { PushItem(it) })) {
+                    val pushItems = plan.pushes.map { e ->
+                        val extra = if (p != AccountProvider.MAL) PushExtra(notes = VaultOwnership.withMark(e.notes, false)) else PushExtra()
+                        PushItem(e, extra)
+                    }
+                    for (out in api.pushMany(token, who, pushItems)) {
                         val entry = out.item.entry
                         if (out.result != null) {
                             pushed++
                             log += "↑ Sent \"${entry.title}\""
                             val ids = out.result.remoteEntryId?.let { mapOf("${key}Entry" to it) } ?: emptyMap()
-                            // Keep updatedAt so the pushed row isn't mistaken for a new local edit.
-                            dao.upsert((byId[entry.id] ?: entry).copy(remoteIds = RemoteIds.merge(entry.remoteIds, ids)))
-                        } else if (out.error?.kind == FailureKind.RATE_LIMITED) { limited = out.error; log += "⏸ Rate limited at \"${entry.title}\"" }
-                        else { failed++; log += "✗ \"${entry.title}\": ${Sanitizer.clean(out.error?.message)}" }
+                            val current = byId[entry.id] ?: entry
+                            // Keep updatedAt so the pushed row isn't mistaken for a new local edit; clear pendingSync if single-provider.
+                            dao.upsert(current.copy(remoteIds = RemoteIds.merge(entry.remoteIds, ids), pendingSync = if (multiProvider) current.pendingSync else false))
+                        } else if (out.error?.kind == FailureKind.RATE_LIMITED) {
+                            limited = out.error
+                            failedIds += entry.id
+                            log += "⏸ Rate limited at \"${entry.title}\""
+                        } else {
+                            failed++
+                            failedIds += entry.id
+                            // Ensure the failed row keeps pendingSync = true so it is retried on the next sync.
+                            val current = byId[entry.id] ?: entry
+                            dao.upsert(current.copy(pendingSync = true))
+                            log += "✗ \"${entry.title}\": ${Sanitizer.clean(out.error?.message)}"
+                        }
                     }
-                    report = SyncReport(p, plan.imports.size, plan.pulls.size, pushed, failed, plan.conflicts, plan.skippedUnmatched, toVault, o.deleted)
+                    report = SyncReport(
+                        p, plan.imports.size, plan.pulls.size, pushed, failed, plan.conflicts, plan.skippedUnmatched,
+                        toVault, o.deleted, retryable = failed > 0 || o.hadFailures, failedEntryIds = failedIds
+                    )
                 }
                 // Partial progress is kept; the rest is retried automatically.
                 limited?.let { throw it }
                 report
             }
-            if (!vaultMode) accounts.recordSync(p, t0)
-            diagnostics.record(p.label, if (vaultMode) "vault sync" else "sync", true, System.currentTimeMillis() - t0)
+            if (!vaultMode) {
+                if (report.ok) accounts.recordSync(p, t0)
+                else accounts.recordError(p, "${report.failedPushes} title(s) could not be sent")
+            }
+            diagnostics.record(p.label, if (vaultMode) "vault sync" else "sync", report.ok, System.currentTimeMillis() - t0)
             val done = report.copy(details = log)
-            syncLog.add(SyncLogEntry(t0, p.label + if (vaultMode) " (H-Vault)" else "", true, done.summary(), log))
+            syncLog.add(SyncLogEntry(t0, p.label + if (vaultMode) " (H-Vault)" else "", report.ok, done.summary(), log))
             done
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             val kind = (e as? ProviderException)?.kind
             if (kind == FailureKind.RATE_LIMITED) SyncWorker.runLater(ctx, 6)
+            val retryable = kind == FailureKind.NETWORK || kind == FailureKind.TIMEOUT ||
+                kind == FailureKind.RATE_LIMITED || kind == FailureKind.SERVER
             val msg = when (kind) {
                 FailureKind.NETWORK, FailureKind.TIMEOUT -> "You appear to be offline. Changes stay queued."
                 FailureKind.RATE_LIMITED -> "${p.label} is limiting requests. What was sent is kept; the rest goes out automatically in a few minutes."
@@ -231,7 +299,7 @@ class SyncManager @Inject constructor(
             log += "✗ $msg"
             syncLog.add(SyncLogEntry(t0, p.label + if (vaultMode) " (H-Vault)" else "", false, "${p.label}: $msg", log))
             diagnostics.record(p.label, if (vaultMode) "vault sync" else "sync", false, System.currentTimeMillis() - t0, e.message)
-            SyncReport(p, error = msg, vaultMode = vaultMode)
+            SyncReport(p, error = msg, vaultMode = vaultMode, retryable = retryable)
         }
     }
 
@@ -338,7 +406,8 @@ class SyncManager @Inject constructor(
                     HVaultEntry(
                         id = vaultId, title = m.title, imageUrl = m.coverUrl,
                         totalEpisodes = m.episodes, watchedEpisodes = r.progress, status = r.status,
-                        rating = r.score10, studio = null, isCensored = false, tags = m.genres, notes = "",
+                        rating = r.score10, studio = null, isCensored = false, tags = m.genres,
+                        notes = VaultOwnership.withMark(r.notes, false),
                         durationMinutes = m.durationMinutes, updatedAt = if (r.updatedAt > 0) r.updatedAt else System.currentTimeMillis()
                     )
                 )

@@ -34,6 +34,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
+import java.util.UUID
 import javax.inject.Inject
 
 @HiltViewModel
@@ -54,12 +55,12 @@ open class ApiSourcesViewModel @Inject constructor(
         viewModelScope.launch { done(providers.test(source)) }
     }
 
-    /** Tests the form's current values without saving them. A MAL Client ID is held under a throw-away key. */
+    /** Tests the form's current values without saving them. A MAL Client ID is held under a unique throw-away key. */
     fun testDraft(type: AnimeApiType, name: String, url: String, clientId: String, existingId: String?, done: (CheckResult) -> Unit) {
         viewModelScope.launch {
             val v = SourceValidator.validate(name, url, type, store.snapshot(), existingId)
             if (!v.ok) { done(CheckResult(CheckKind.UNSUPPORTED_SCHEMA, v.error ?: "Invalid source", 0)); return@launch }
-            val tmp = "draft-test"
+            val tmp = "draft-test-${UUID.randomUUID()}"
             val cid = clientId.ifBlank { existingId?.let { store.clientId(it) }.orEmpty() }
             if (type == AnimeApiType.MAL_V2) store.setClientId(tmp, cid)
             try { done(providers.test(ApiSource(tmp, name.trim(), v.normalizedUrl!!, type, adult = store.adultScope))) }

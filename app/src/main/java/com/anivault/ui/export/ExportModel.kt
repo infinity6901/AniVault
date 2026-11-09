@@ -6,6 +6,7 @@ import com.anivault.data.library.StatsCalculator
 import com.anivault.data.local.entity.AnimeEntry
 import com.anivault.data.local.entity.HVaultEntry
 import com.anivault.data.local.model.WatchStatus
+import com.anivault.data.provider.SafeDns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -90,12 +91,18 @@ object ExportData {
 @Singleton
 class CoverLoader @Inject constructor() {
     private val client = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS).readTimeout(10, TimeUnit.SECONDS).callTimeout(15, TimeUnit.SECONDS).build()
+        .dns(SafeDns)
+        .followRedirects(true)
+        .followSslRedirects(false)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(15, TimeUnit.SECONDS)
+        .build()
 
     /** url -> JPEG bytes, about 160 px wide. Runs up to 6 downloads at once. */
     fun load(urls: Collection<String>): Map<String, ByteArray> = runBlocking(Dispatchers.IO) {
         val gate = Semaphore(6)
-        urls.filter { it.startsWith("http", ignoreCase = true) }.distinct()
+        urls.filter { it.startsWith("https://", ignoreCase = true) }.distinct()
             .map { u -> async { u to gate.withPermit { fetch(u) } } }
             .mapNotNull { d -> d.await().let { (u, b) -> b?.let { u to it } } }
             .toMap()
@@ -104,9 +111,15 @@ class CoverLoader @Inject constructor() {
     private fun fetch(url: String): ByteArray? = try {
         client.newCall(Request.Builder().url(url).header("Accept", "image/*").build()).execute().use { r ->
             if (!r.isSuccessful) return null
-            val raw = r.body?.bytes() ?: return null
+            val body = r.body ?: return null
+            if (body.contentLength() > MAX_IMAGE_BYTES) return null
+            val source = body.source()
+            source.request(MAX_IMAGE_BYTES + 1L)
+            if (source.buffer.size > MAX_IMAGE_BYTES) return null
+            val raw = body.bytes()
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(raw, 0, raw.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
             var sample = 1
             while (bounds.outWidth / (sample * 2) >= TARGET_W) sample *= 2
             val bmp = BitmapFactory.decodeByteArray(raw, 0, raw.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
@@ -115,5 +128,8 @@ class CoverLoader @Inject constructor() {
         }
     } catch (_: Exception) { null }
 
-    private companion object { const val TARGET_W = 300 }
+    private companion object {
+        const val TARGET_W = 300
+        const val MAX_IMAGE_BYTES = 10L * 1024 * 1024
+    }
 }

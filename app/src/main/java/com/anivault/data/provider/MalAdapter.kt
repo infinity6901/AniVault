@@ -33,12 +33,17 @@ class MalAdapter(
             BrowseSection.TOP_RATED -> "$base/anime/ranking?ranking_type=all&limit=$PAGE_SIZE&offset=$off&fields=$FIELDS"
             BrowseSection.SEASONAL -> {
                 val s = Seasons.current()
-                "$base/anime/season/${s.year}/${s.name.lowercase()}?sort=anime_num_list_users&limit=$PAGE_SIZE&offset=$off&fields=$FIELDS"
+                return browseSeason(s.year, s.name, page)
             }
             BrowseSection.RECENTLY_UPDATED ->
                 throw ProviderException(FailureKind.UNSUPPORTED, "${source.name} does not offer “${section.label}”")
         }
         return get(url)
+    }
+
+    override suspend fun browseSeason(year: Int, season: String, page: Int): PagedResult {
+        val off = (page - 1) * PAGE_SIZE
+        return get("$base/anime/season/$year/${season.lowercase()}?sort=anime_num_list_users&limit=$PAGE_SIZE&offset=$off&fields=$FIELDS")
     }
 
     override suspend fun check() {

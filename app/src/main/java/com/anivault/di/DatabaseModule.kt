@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import com.anivault.data.local.dao.AnimeDao
 import com.anivault.data.local.dao.HVaultDao
+import com.anivault.data.local.dao.WatchHistoryDao
 import com.anivault.data.local.db.AppDatabase
 import dagger.Module
 import dagger.Provides
@@ -52,10 +53,11 @@ object DatabaseModule {
         val factory: SupportSQLiteOpenHelper.Factory = SupportFactory(passphrase, null, false)
         return Room.databaseBuilder(ctx, AppDatabase::class.java, SECURE_DB)
             .openHelperFactory(factory)
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
             .build()
     }
 
     @Provides fun provideAnimeDao(db: AppDatabase): AnimeDao = db.animeDao()
     @Provides fun provideHVaultDao(db: AppDatabase): HVaultDao = db.hVaultDao()
+    @Provides fun provideWatchHistoryDao(db: AppDatabase): WatchHistoryDao = db.watchHistoryDao()
 }

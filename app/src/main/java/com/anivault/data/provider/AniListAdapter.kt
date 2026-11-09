@@ -25,11 +25,18 @@ class AniListAdapter(
             BrowseSection.RECENTLY_UPDATED -> buildQuery("", "status: RELEASING, sort: [UPDATED_AT_DESC]", adult)
             BrowseSection.SEASONAL -> {
                 val s = Seasons.current()
-                vars.addProperty("season", s.name)
-                vars.addProperty("seasonYear", s.year)
-                buildQuery("§season: MediaSeason, §seasonYear: Int", "season: §season, seasonYear: §seasonYear, sort: [POPULARITY_DESC]", adult)
+                return browseSeason(s.year, s.name, page)
             }
         }
+        return post(q, vars)
+    }
+
+    override suspend fun browseSeason(year: Int, season: String, page: Int): PagedResult {
+        val vars = vars(page).apply {
+            addProperty("season", season.uppercase())
+            addProperty("seasonYear", year)
+        }
+        val q = buildQuery("§season: MediaSeason, §seasonYear: Int", "season: §season, seasonYear: §seasonYear, sort: [POPULARITY_DESC]", adult)
         return post(q, vars)
     }
 

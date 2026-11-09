@@ -1,7 +1,9 @@
 package com.anivault.data.library
 
+import androidx.room.withTransaction
 import com.anivault.data.local.dao.AnimeDao
 import com.anivault.data.local.dao.HVaultDao
+import com.anivault.data.local.db.AppDatabase
 import com.anivault.data.local.entity.AnimeEntry
 import com.anivault.data.local.entity.HVaultEntry
 import com.anivault.data.local.entity.RemoteIds
@@ -35,17 +37,47 @@ object VaultMapping {
         else -> "vault:${v.id}"
     }
 
-    fun toLibrary(v: HVaultEntry, now: Long, linked: String = ""): AnimeEntry {
+    fun toLibrary(v: HVaultEntry, now: Long, linked: String = "", stashed: AnimeEntry? = null): AnimeEntry {
         val fromId = if (v.id.startsWith("sync:")) {
             val parts = v.id.removePrefix("sync:").split(":", limit = 2)
             if (parts.size == 2) mapOf(parts[0] to parts[1]) else emptyMap()
         } else emptyMap()
-        val remote = RemoteIds.parse(linked) + fromId
+        val remote = (stashed?.let { RemoteIds.parse(it.remoteIds) } ?: emptyMap()) + RemoteIds.parse(linked) + fromId
+        if (stashed != null) {
+            return stashed.copy(
+                title = v.title.ifBlank { stashed.title },
+                imageUrl = v.imageUrl.ifBlank { stashed.imageUrl },
+                totalEpisodes = if (v.totalEpisodes > 0) v.totalEpisodes else stashed.totalEpisodes,
+                watchedEpisodes = v.watchedEpisodes,
+                status = v.status,
+                rating = v.rating,
+                notes = v.notes,
+                durationMinutes = if (v.durationMinutes > 0) v.durationMinutes else stashed.durationMinutes,
+                updatedAt = now,
+                remoteIds = RemoteIds.encode(remote),
+                pendingSync = remote.isNotEmpty()
+            )
+        }
         return AnimeEntry(
             id = libraryId(v), title = v.title, imageUrl = v.imageUrl, totalEpisodes = v.totalEpisodes,
             watchedEpisodes = v.watchedEpisodes, status = v.status, rating = v.rating, genres = v.tags, notes = v.notes,
             durationMinutes = v.durationMinutes, updatedAt = now, addedAt = now, sourceName = "H-Vault",
             remoteIds = RemoteIds.encode(remote), pendingSync = remote.isNotEmpty()
+        )
+    }
+
+    /** Merges H-Vault tracking updates into an existing library row when both have the same library ID. */
+    fun mergeIntoLibrary(existing: AnimeEntry, fromVault: AnimeEntry, now: Long): AnimeEntry {
+        val mergedRemote = RemoteIds.merge(existing.remoteIds, RemoteIds.parse(fromVault.remoteIds))
+        return existing.copy(
+            watchedEpisodes = fromVault.watchedEpisodes,
+            totalEpisodes = if (existing.totalEpisodes > 0) existing.totalEpisodes else fromVault.totalEpisodes,
+            status = fromVault.status,
+            rating = if (fromVault.rating > 0f) fromVault.rating else existing.rating,
+            notes = fromVault.notes.ifBlank { existing.notes },
+            remoteIds = mergedRemote,
+            updatedAt = now,
+            pendingSync = mergedRemote.isNotBlank()
         )
     }
 }
@@ -78,6 +110,7 @@ object VaultRules {
 
 @Singleton
 class VaultMover @Inject constructor(
+    private val db: AppDatabase,
     private val animeDao: AnimeDao,
     private val vaultDao: HVaultDao,
     private val remoteOps: com.anivault.data.sync.RemoteOps,
@@ -88,11 +121,15 @@ class VaultMover @Inject constructor(
         val now = System.currentTimeMillis()
         val rows = ids.mapNotNull { animeDao.getById(it) }
         if (rows.isEmpty()) return 0
-        vaultDao.upsertAll(rows.map { VaultMapping.toVault(it, now) })
-        animeDao.deleteByIds(rows.map { it.id })
-        // Remember every account link so no service's sync puts the title back, and tag it on the accounts.
+        db.withTransaction {
+            vaultDao.upsertAll(rows.map { VaultMapping.toVault(it, now) })
+            animeDao.deleteByIds(rows.map { it.id })
+        }
+        // Remember every account link and original metadata so moving back loses nothing.
         rows.forEach { e ->
-            remoteOps.setLink(VaultMapping.vaultId(e), e.remoteIds)
+            val vId = VaultMapping.vaultId(e)
+            remoteOps.setLink(vId, e.remoteIds)
+            remoteOps.setStash(vId, e)
             if (prefs.markVaultOnAccounts) remoteOps.enqueueAll(e.remoteIds, com.anivault.data.sync.OpType.MARK)
         }
         return rows.size
@@ -103,14 +140,24 @@ class VaultMover @Inject constructor(
         val now = System.currentTimeMillis()
         val rows = ids.mapNotNull { vaultDao.getById(it) }
         if (rows.isEmpty()) return 0
-        // Keep an existing library row for the same title instead of overwriting it.
-        val fresh = rows.map { VaultMapping.toLibrary(it, now, remoteOps.link(it.id)) }.filter { animeDao.getById(it.id) == null }
-        animeDao.upsertAll(fresh)
-        vaultDao.deleteByIds(rows.map { it.id })
+        val toUpsert = rows.map { v ->
+            val mapped = VaultMapping.toLibrary(v, now, remoteOps.link(v.id), remoteOps.stash(v.id))
+            val existing = animeDao.getById(mapped.id)
+            if (existing != null) VaultMapping.mergeIntoLibrary(existing, mapped, now) else mapped
+        }
+        db.withTransaction {
+            animeDao.upsertAll(toUpsert)
+            vaultDao.deleteByIds(rows.map { it.id })
+        }
         rows.forEach { v ->
-            val ids = RemoteIds.encode(RemoteIds.parse(remoteOps.link(v.id)) + VaultMapping.toLibrary(v, now).let { RemoteIds.parse(it.remoteIds) })
+            val stashed = remoteOps.stash(v.id)
+            val idsToUnmark = RemoteIds.encode(
+                RemoteIds.parse(remoteOps.link(v.id)) +
+                    VaultMapping.toLibrary(v, now, remoteOps.link(v.id), stashed).let { RemoteIds.parse(it.remoteIds) }
+            )
             remoteOps.setLink(v.id, "")
-            if (prefs.markVaultOnAccounts) remoteOps.enqueueAll(ids, com.anivault.data.sync.OpType.UNMARK)
+            remoteOps.setStash(v.id, null)
+            if (prefs.markVaultOnAccounts) remoteOps.enqueueAll(idsToUnmark, com.anivault.data.sync.OpType.UNMARK)
         }
         return rows.size
     }

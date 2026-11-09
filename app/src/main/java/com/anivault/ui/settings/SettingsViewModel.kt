@@ -17,6 +17,7 @@ import com.anivault.di.LegacyMigrator
 import com.anivault.notify.Notifications
 import com.anivault.ui.export.DocxExportManager
 import com.anivault.ui.export.JsonExportManager
+import com.anivault.ui.export.ListExportImportManager
 import com.anivault.ui.export.PdfExportManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -36,6 +37,7 @@ class SettingsViewModel @Inject constructor(
     private val sync: SyncManager,
     private val syncLog: com.anivault.data.sync.SyncLogStore,
     private val malImporter: com.anivault.data.library.MalImporter,
+    private val listTransfer: ListExportImportManager,
     private val backup: BackupManager,
     private val animeDao: AnimeDao,
     private val hvaultDao: com.anivault.data.local.dao.HVaultDao,
@@ -136,9 +138,13 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun refreshCovers() = launchBusy {
-        val urls = withContext(Dispatchers.IO) { animeDao.getAll().map { it.imageUrl } + hvaultDao.getAll().map { it.imageUrl } }
-        com.anivault.ui.common.CoverCache.refresh(ctx, urls)
-        say("Cleared cached covers. Downloading ${urls.filter { it.isNotBlank() }.distinct().size} again in the background.")
+        val unlocked = vault.unlocked.value
+        val libUrls = withContext(Dispatchers.IO) { animeDao.getAll().map { it.imageUrl } }
+        val vaultUrls = if (unlocked) withContext(Dispatchers.IO) { hvaultDao.getAll().map { it.imageUrl } } else emptyList()
+        com.anivault.ui.common.CoverCache.refresh(ctx, libUrls)
+        if (vaultUrls.isNotEmpty()) com.anivault.ui.common.CoverCache.preload(ctx, vaultUrls, allowDiskCache = false)
+        val count = (libUrls + vaultUrls).filter { it.isNotBlank() }.distinct().size
+        say("Cleared cached covers. Downloading $count again in the background.")
     }
 
     fun importMal(uri: Uri) = launchBusy {
@@ -151,10 +157,26 @@ class SettingsViewModel @Inject constructor(
         })
     }
 
+    fun importCsvOrJson(uri: Uri) = launchBusy {
+        val r = withContext(Dispatchers.IO) { listTransfer.importCsvOrJson(uri) }
+        say(when {
+            r.failed -> "Couldn't read that file. Choose an AniVault CSV or JSON export."
+            else -> "Imported ${r.addedAnime} library titles" +
+                (if (r.addedVault > 0) " and ${r.addedVault} H-Vault entries" else "") +
+                ", skipped ${r.skipped} already here."
+        })
+    }
+
     fun exportList(kind: String) = launchBusy {
         val entries = animeDao.getAll()
         val ok = withContext(Dispatchers.IO) {
-            when (kind) { "pdf" -> pdf.exportAnimeToPdf(entries); "docx" -> docx.exportAnimeToDocs(entries); else -> json.exportAnimeJson(entries) }
+            when (kind) {
+                "pdf" -> pdf.exportAnimeToPdf(entries)
+                "docx" -> docx.exportAnimeToDocs(entries)
+                "csv" -> listTransfer.exportCsv(entries)
+                "mal_xml" -> listTransfer.exportMalXml(entries)
+                else -> json.exportAnimeJson(entries)
+            }
         }
         say(if (ok) "Saved to Downloads." else "Export failed.")
     }

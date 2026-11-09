@@ -43,6 +43,7 @@ import com.anivault.data.library.VaultRules
 import com.anivault.data.local.entity.HVaultEntry
 import com.anivault.data.local.model.WatchStatus
 import com.anivault.ui.common.*
+import com.anivault.ui.library.SwipeableLibraryRow
 import com.anivault.ui.theme.AniVaultColors
 import com.anivault.ui.theme.dim
 
@@ -101,7 +102,7 @@ fun VaultLibraryTab(entries: List<HVaultEntry>, vm: VaultViewModel) {
         val listState = rememberLazyListState()
         val scope = rememberCoroutineScope()
         val appCtx = androidx.compose.ui.platform.LocalContext.current.applicationContext
-        LaunchedEffect(entries.size) { com.anivault.ui.common.CoverCache.preload(appCtx, entries.map { it.imageUrl }) }
+        LaunchedEffect(entries.size) { com.anivault.ui.common.CoverCache.preload(appCtx, entries.map { it.imageUrl }, allowDiskCache = false) }
         val header: @Composable () -> Unit = {
             Column {
                 CompactSearch(text, { text = it }, "Search your vault", Modifier.padding(horizontal = 16.dp, vertical = 6.dp), trailing = {
@@ -137,7 +138,20 @@ fun VaultLibraryTab(entries: List<HVaultEntry>, vm: VaultViewModel) {
                 }
                 else -> LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     item(key = "header") { header() }
-                    items(shown, key = { it.id }) { e -> Box(Modifier.padding(horizontal = 16.dp)) { VaultListRow(e, e.id in sel, selecting, { if (selecting) toggle(e.id) else open = e.id }, { toggle(e.id) }) } }
+                    items(shown, key = { it.id }) { e ->
+                        Box(Modifier.padding(horizontal = 16.dp)) {
+                            SwipeableLibraryRow(
+                                enabled = !selecting,
+                                onSwipeRightPlusOne = { vm.update(VaultRules.withProgress(e, e.watchedEpisodes + 1)) },
+                                onSwipeLeftStatus = {
+                                    val next = if (e.status == WatchStatus.WATCHING) WatchStatus.COMPLETED else WatchStatus.WATCHING
+                                    vm.update(VaultRules.withStatus(e, next))
+                                }
+                            ) {
+                                VaultListRow(e, e.id in sel, selecting, { if (selecting) toggle(e.id) else open = e.id }, { toggle(e.id) })
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -164,7 +178,7 @@ private fun VaultGridItem(e: HVaultEntry, selected: Boolean, selecting: Boolean,
             .semantics { contentDescription = "${e.title}, ${e.status.label}, ${progressText(e)}${if (selected) ", selected" else ""}" }
     ) {
         Box {
-            Poster(e.imageUrl, Modifier.fillMaxWidth().aspectRatio(0.7f))
+            Poster(e.imageUrl, Modifier.fillMaxWidth().aspectRatio(0.7f), allowDiskCache = false)
             Box(Modifier.align(Alignment.TopStart).padding(6.dp)) { StatusChip(e.status) }
             if (selecting) Checkbox(selected, null, Modifier.align(Alignment.TopEnd).padding(2.dp).background(Color(0x990B0D16), RoundedCornerShape(6.dp)))
         }
@@ -178,7 +192,7 @@ private fun VaultListRow(e: HVaultEntry, selected: Boolean, selecting: Boolean, 
     AniCard(Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             if (selecting) { Checkbox(selected, null); Spacer(Modifier.width(8.dp)) }
-            Poster(e.imageUrl, Modifier.width(56.dp).height(80.dp), RoundedCornerShape(8.dp))
+            Poster(e.imageUrl, Modifier.width(56.dp).height(80.dp), RoundedCornerShape(8.dp), allowDiskCache = false)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(e.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
@@ -204,7 +218,7 @@ private fun VaultDetailSheet(original: HVaultEntry, vm: VaultViewModel, onDismis
     ModalBottomSheet(onDismissRequest = { if (dirty) confirmDiscard = true else onDismiss() }, containerColor = MaterialTheme.colorScheme.surface) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row {
-                Poster(e.imageUrl, Modifier.width(96.dp).height(138.dp))
+                Poster(e.imageUrl, Modifier.width(96.dp).height(138.dp), allowDiskCache = false)
                 Spacer(Modifier.width(14.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(e.title, fontWeight = FontWeight.Bold, fontSize = 19.sp)

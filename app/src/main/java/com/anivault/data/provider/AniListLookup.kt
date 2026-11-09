@@ -29,7 +29,30 @@ data class LookupMedia(
 
 data class RelatedTitle(val relation: String, val media: LookupMedia)
 
-/** Public, key-less AniList queries used by airing reminders, the related-titles row and the MAL import. */
+data class CharacterCredit(
+    val id: Int,
+    val name: String,
+    val role: String,
+    val imageUrl: String,
+    val voiceActor: String? = null
+)
+
+data class StreamingLink(val site: String, val url: String)
+
+data class MediaExtras(
+    val studios: List<String> = emptyList(),
+    val characters: List<CharacterCredit> = emptyList(),
+    val links: List<StreamingLink> = emptyList(),
+    val relations: List<RelatedTitle> = emptyList()
+)
+
+data class AiringScheduleSlot(
+    val episode: Int,
+    val airingAt: Long,
+    val media: LookupMedia
+)
+
+/** Public, key-less AniList queries used by airing reminders, calendar, characters/studios/links, related titles and MAL import. */
 @Singleton
 class AniListLookup @Inject constructor(@Named("api") client: OkHttpClient, prefs: AppPrefs) {
     private val http: HttpTransport = OkHttpTransport(client) { prefs.networkTimeoutSec }
@@ -64,18 +87,71 @@ class AniListLookup @Inject constructor(@Named("api") client: OkHttpClient, pref
     }
 
     /** Sequels, prequels and other related anime for one title, adult titles left out. */
-    suspend fun relations(id: Int, byMal: Boolean = false): List<RelatedTitle> {
+    suspend fun relations(id: Int, byMal: Boolean = false): List<RelatedTitle> =
+        extras(id, byMal).relations
+
+    /** Studios, top characters with voice actors, official streaming links, and related franchise titles in one call. */
+    suspend fun extras(id: Int, byMal: Boolean = false): MediaExtras {
         val idArg = if (byMal) "idMal: §id" else "id: §id"
-        val q = "query (§id: Int) { Media($idArg, type: ANIME) { relations { edges { relationType node { $FIELDS type } } } } }"
-        val data = run(q, JsonObject().apply { addProperty("id", id) })
-        val edges = data.obj("Media")?.obj("relations")?.arr("edges")?.objects().orEmpty()
+        val q = "query (§id: Int) { Media($idArg, type: ANIME) { " +
+            "studios(isMain: true) { nodes { name } } " +
+            "characters(sort: [ROLE, RELEVANCE], perPage: 10) { edges { role node { id name { full } image { medium } } voiceActors(language: JAPANESE, sort: [RELEVANCE]) { name { full } } } } " +
+            "externalLinks { site url type } " +
+            "relations { edges { relationType node { $FIELDS type } } } " +
+            "} }"
+        val media = run(q, JsonObject().apply { addProperty("id", id) }).obj("Media") ?: return MediaExtras()
+        val studios = media.obj("studios")?.arr("nodes")?.objects()?.mapNotNull { it.str("name")?.takeIf(String::isNotBlank) }.orEmpty().distinct()
+        val characters = media.obj("characters")?.arr("edges")?.objects()?.mapNotNull { edge ->
+            val node = edge.obj("node") ?: return@mapNotNull null
+            val cid = node.int("id") ?: return@mapNotNull null
+            val name = node.obj("name")?.str("full")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val role = prettyEnum(edge.str("role"))
+            val img = node.obj("image")?.str("medium").orEmpty()
+            val va = edge.arr("voiceActors")?.objects()?.firstOrNull()?.obj("name")?.str("full")
+            CharacterCredit(cid, name, role, img, va)
+        }.orEmpty()
+        val links = media.arr("externalLinks")?.objects()?.mapNotNull { l ->
+            val site = l.str("site")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val u = l.str("url")?.takeIf { it.startsWith("https://", ignoreCase = true) } ?: return@mapNotNull null
+            val type = l.str("type").orEmpty()
+            if (type.isBlank() || type == "STREAMING" || type == "INFO") StreamingLink(site, u) else null
+        }.orEmpty().distinctBy { it.site }
+        val edges = media.obj("relations")?.arr("edges")?.objects().orEmpty()
         val wanted = setOf("SEQUEL", "PREQUEL", "PARENT", "SIDE_STORY", "SPIN_OFF", "ALTERNATIVE", "SUMMARY", "COMPILATION")
-        return edges.mapNotNull { e ->
+        val rels = edges.mapNotNull { e ->
             val rel = e.str("relationType") ?: return@mapNotNull null
             val node = e.obj("node") ?: return@mapNotNull null
             if (rel !in wanted || node.str("type") != "ANIME") return@mapNotNull null
             parse(node)?.takeIf { !it.adult }?.let { RelatedTitle(rel, it) }
         }.sortedBy { listOf("PREQUEL", "PARENT", "SEQUEL").indexOf(it.relation).let { i -> if (i < 0) 9 else i } }
+        return MediaExtras(studios, characters, links, rels)
+    }
+
+    /** Weekly airing schedule from AniList between [startSec] and [endSec] (epoch seconds), adult titles excluded. */
+    suspend fun weeklySchedule(startSec: Long, endSec: Long): List<AiringScheduleSlot> {
+        val out = ArrayList<AiringScheduleSlot>()
+        for (page in 1..2) {
+            val q = "query (§page: Int, §s: Int, §e: Int) { Page(page: §page, perPage: 50) { " +
+                "pageInfo { hasNextPage } " +
+                "airingSchedules(airingAt_greater: §s, airingAt_lesser: §e, sort: [TIME]) { episode airingAt media { $FIELDS } } " +
+                "} }"
+            val vars = JsonObject().apply {
+                addProperty("page", page)
+                addProperty("s", startSec)
+                addProperty("e", endSec)
+            }
+            val pageObj = run(q, vars).obj("Page") ?: break
+            val items = pageObj.arr("airingSchedules")?.objects().orEmpty()
+            for (item in items) {
+                val ep = item.int("episode") ?: continue
+                val atSec = item.int("airingAt")?.toLong() ?: continue
+                val m = item.obj("media")?.let(::parse) ?: continue
+                if (!m.adult) out += AiringScheduleSlot(ep, atSec * 1000L, m)
+            }
+            val hasNext = pageObj.obj("pageInfo")?.get("hasNextPage")?.takeIf { it.isJsonPrimitive }?.asBoolean == true
+            if (!hasNext) break
+        }
+        return out
     }
 
     private fun parse(o: JsonObject): LookupMedia? {
@@ -90,7 +166,7 @@ class AniListLookup @Inject constructor(@Named("api") client: OkHttpClient, pref
             episodes = o.int("episodes") ?: 0, durationMinutes = o.int("duration") ?: 0,
             year = o.int("seasonYear"), season = o.str("season").orEmpty().lowercase(),
             format = o.str("format").orEmpty(), adult = o.get("isAdult")?.takeIf { it.isJsonPrimitive }?.asBoolean == true,
-            synopsis = o.str("description").orEmpty(),
+            synopsis = HtmlText.clean(o.str("description")),
             nextEpisode = next?.int("episode"), nextAiringAt = next?.int("airingAt")?.let { it * 1000L },
             airingStatus = o.str("status").orEmpty()
         )

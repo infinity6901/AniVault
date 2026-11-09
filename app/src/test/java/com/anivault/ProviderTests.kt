@@ -5,6 +5,7 @@ import com.anivault.data.provider.*
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
+import java.net.InetAddress
 
 private fun src(id: String, name: String = id) = ApiSource(id, name, "https://$id.example.org", AnimeApiType.JIKAN_COMPATIBLE)
 
@@ -74,7 +75,22 @@ class SourceValidatorTest {
     @Test fun accepts_https() { assertTrue(v("https://api.example.org/v4").ok) }
     @Test fun rejects_http() { assertFalse(v("http://api.example.org").ok) }
     @Test fun rejects_private_hosts() {
-        listOf("https://localhost/x", "https://192.168.1.5/", "https://10.0.0.1/", "https://printer.local/", "https://127.0.0.1/").forEach { assertFalse(it, v(it).ok) }
+        listOf(
+            "https://localhost/x",
+            "https://192.168.1.5/",
+            "https://10.0.0.1/",
+            "https://printer.local/",
+            "https://127.0.0.1/",
+            "https://[::ffff:127.0.0.1]/",
+            "https://[::ffff:192.168.1.1]/",
+            "https://[fd00::1]/"
+        ).forEach { assertFalse(it, v(it).ok) }
+    }
+    @Test fun safe_dns_blocks_private_and_mapped_addresses() {
+        assertTrue(SafeDns.isPrivateAddress(InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))))
+        assertTrue(SafeDns.isPrivateAddress(InetAddress.getByAddress(byteArrayOf(100, 64, 0, 1))))
+        assertTrue(SafeDns.isPrivateAddress(InetAddress.getByAddress(byteArrayOf(0xfd.toByte(), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1))))
+        assertFalse(SafeDns.isPrivateAddress(InetAddress.getByAddress(byteArrayOf(8, 8, 8, 8))))
     }
     @Test fun rejects_secrets_in_url() {
         assertFalse(v("https://api.example.org/v1?api_key=abc").ok)

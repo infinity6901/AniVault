@@ -6,6 +6,8 @@ import com.anivault.data.local.model.WatchStatus
 import com.anivault.data.local.dao.AnimeDao
 import com.anivault.data.local.dao.HVaultDao
 import com.anivault.data.provider.AniListLookup
+import java.io.FilterInputStream
+import java.io.IOException
 import java.io.InputStream
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -25,6 +27,7 @@ data class MalRow(
 data class MalImportResult(val added: Int, val skipped: Int, val toVault: Int, val failed: Boolean = false)
 
 object MalParser {
+    private const val MAX_XML_BYTES = 50L * 1024 * 1024
     private val DATE = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
 
     fun status(raw: String): WatchStatus = when (raw.trim().lowercase()) {
@@ -40,16 +43,34 @@ object MalParser {
     fun date(raw: String): Long? {
         val t = raw.trim()
         if (t.isEmpty() || t.startsWith("0000") || t.contains("-00")) return null
-        return runCatching { DATE.parse(t)?.time }.getOrNull()
+        return runCatching { synchronized(DATE) { DATE.parse(t)?.time } }.getOrNull()
     }
 
-    /** Accepts plain XML or gzip (MAL serves .xml.gz). */
+    /** Accepts plain XML or gzip (MAL serves .xml.gz), bounded to prevent decompression bombs. */
     fun open(raw: InputStream): InputStream {
         val b = java.io.BufferedInputStream(raw)
         b.mark(2)
         val a = b.read(); val c = b.read()
         b.reset()
-        return if (a == 0x1f && c == 0x8b) GZIPInputStream(b) else b
+        val unpacked = if (a == 0x1f && c == 0x8b) GZIPInputStream(b) else b
+        return BoundedStream(unpacked, MAX_XML_BYTES)
+    }
+
+    private class BoundedStream(inner: InputStream, private val maxBytes: Long) : FilterInputStream(inner) {
+        private var readBytes = 0L
+        override fun read(): Int {
+            val b = super.read()
+            if (b >= 0 && ++readBytes > maxBytes) throw IOException("Import file exceeds maximum allowed size")
+            return b
+        }
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            val n = super.read(b, off, len)
+            if (n > 0) {
+                readBytes += n
+                if (readBytes > maxBytes) throw IOException("Import file exceeds maximum allowed size")
+            }
+            return n
+        }
     }
 
     fun parse(input: InputStream): List<MalRow> {
@@ -57,6 +78,7 @@ object MalParser {
         // Untrusted file: no DTDs / external entities.
         runCatching { f.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
         runCatching { f.setFeature("http://xml.org/sax/features/external-general-entities", false) }
+        runCatching { f.setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
         runCatching { f.isXIncludeAware = false; f.isExpandEntityReferences = false }
         val doc = f.newDocumentBuilder().parse(open(input))
         val nodes = doc.getElementsByTagName("anime")

@@ -1,18 +1,32 @@
 package com.anivault
 
+import com.anivault.data.library.Franchise
 import com.anivault.data.library.LibraryQuery
 import com.anivault.data.library.MalParser
+import com.anivault.data.library.ProgressRules
+import com.anivault.data.library.SmartListPreset
+import com.anivault.data.library.SmartLists
+import com.anivault.data.library.SortField
+import com.anivault.data.library.StatsCalculator
 import com.anivault.data.local.entity.AnimeEntry
+import com.anivault.data.local.model.MediaType
 import com.anivault.data.local.model.WatchStatus
 import com.anivault.data.provider.AiringFormat
+import com.anivault.ui.common.CoverPalette
+import com.anivault.ui.common.CoverUrls
 import com.anivault.ui.common.Tags
+import com.anivault.ui.export.ListExportCodec
+import com.anivault.ui.theme.LiquidGlassConfig
+import com.anivault.ui.theme.LiquidGlassTint
+import com.anivault.ui.theme.Palette
+import com.anivault.widget.AiringWidgetText
 import com.anivault.widget.WidgetRules
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import com.anivault.data.library.Franchise
-import com.anivault.ui.common.CoverUrls
 import org.junit.Test
+import kotlin.random.Random
 
 class NewFeatureTests {
     @Test fun airingFormat() {
@@ -61,8 +75,12 @@ class NewFeatureTests {
         val a = AnimeEntry(id = "a", status = WatchStatus.WATCHING, totalEpisodes = 12, watchedEpisodes = 3, updatedAt = 5)
         val b = AnimeEntry(id = "b", status = WatchStatus.WATCHING, totalEpisodes = 12, watchedEpisodes = 12, updatedAt = 9)
         val c = AnimeEntry(id = "c", status = WatchStatus.COMPLETED)
-        assertEquals(listOf("a"), WidgetRules.candidates(listOf(a, b, c)).map { it.id })
+        val candidates = WidgetRules.candidates(listOf(a, b, c))
+        assertEquals(listOf("a"), candidates.map { it.id })
         assertEquals(0, WidgetRules.wrap(2, 2)); assertEquals(1, WidgetRules.wrap(-1, 2)); assertEquals(0, WidgetRules.wrap(5, 0))
+        // Target resolution matches renderedId and returns null if the rendered show already completed.
+        assertEquals("a", WidgetRules.resolveTarget(candidates, 0, "a")?.id)
+        assertNull(WidgetRules.resolveTarget(candidates, 0, "b"))
     }
 
     @Test fun franchiseKeysGroupSeasons() {
@@ -84,5 +102,100 @@ class NewFeatureTests {
         assertEquals("https://s4.anilist.co/file/anilistcdn/media/anime/cover/extraLarge/x.jpg", CoverUrls.upgrade("https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/x.jpg"))
         assertEquals("https://cdn.myanimelist.net/images/anime/1/2l.jpg", CoverUrls.upgrade("https://cdn.myanimelist.net/images/anime/1/2t.jpg"))
         assertEquals("https://example.com/a.jpg", CoverUrls.upgrade("https://example.com/a.jpg"))
+    }
+
+    @Test fun rewatchRulesAndStats() {
+        val completed = AnimeEntry(
+            id = "bebop",
+            title = "Cowboy Bebop",
+            status = WatchStatus.COMPLETED,
+            totalEpisodes = 26,
+            watchedEpisodes = 26,
+            rewatchCount = 1
+        )
+        val rewatching = ProgressRules.startRewatch(completed, now = 1234L)
+        assertEquals(WatchStatus.WATCHING, rewatching.status)
+        assertEquals(0, rewatching.watchedEpisodes)
+        assertEquals(2, rewatching.rewatchCount)
+
+        val stats = StatsCalculator.compute(listOf(completed))
+        assertEquals(26, stats.totalWatchedEpisodes)
+        assertEquals(52, stats.totalWatchedWithRewatches)
+        assertEquals(1, stats.totalRewatches)
+    }
+
+    @Test fun smartListsRoundTripAndRandomPick() {
+        val preset = SmartListPreset(
+            name = "Short Fantasy",
+            status = WatchStatus.PLAN_TO_WATCH,
+            genre = "Fantasy",
+            sort = SortField.RATING,
+            ascending = false
+        )
+        val encoded = SmartLists.encode(listOf(preset))
+        val decoded = SmartLists.parse(encoded)
+        assertEquals(1, decoded.size)
+        assertEquals("Short Fantasy", decoded[0].name)
+        assertEquals(WatchStatus.PLAN_TO_WATCH, decoded[0].status)
+        assertEquals("Fantasy", decoded[0].genre)
+
+        val entries = listOf(
+            AnimeEntry(id = "1", title = "Frieren", status = WatchStatus.PLAN_TO_WATCH, totalEpisodes = 12, genres = listOf("Fantasy")),
+            AnimeEntry(id = "2", title = "One Piece", status = WatchStatus.PLAN_TO_WATCH, totalEpisodes = 1000, genres = listOf("Fantasy")),
+            AnimeEntry(id = "3", title = "Cyberpunk", status = WatchStatus.WATCHING, totalEpisodes = 10, genres = listOf("Sci-Fi"))
+        )
+        val picked = SmartLists.pickRandom(entries, status = WatchStatus.PLAN_TO_WATCH, genre = "Fantasy", maxEpisodes = 13, rng = Random(42))
+        assertNotNull(picked)
+        assertEquals("1", picked?.id)
+    }
+
+    @Test fun csvAndMalXmlExports() {
+        val entry = AnimeEntry(
+            id = "mal:1",
+            malId = 1,
+            title = "Cowboy Bebop, The Movie",
+            mediaType = MediaType.MOVIE,
+            status = WatchStatus.COMPLETED,
+            totalEpisodes = 1,
+            watchedEpisodes = 1,
+            rewatchCount = 2,
+            rating = 9.5f,
+            genres = listOf("Action", "Sci-Fi"),
+            tags = listOf("classic")
+        )
+        val csv = ListExportCodec.toCsv(listOf(entry))
+        val parsed = ListExportCodec.fromCsv(csv, now = 999L)
+        assertEquals(1, parsed.size)
+        assertEquals("Cowboy Bebop, The Movie", parsed[0].title)
+        assertEquals(WatchStatus.COMPLETED, parsed[0].status)
+        assertEquals(2, parsed[0].rewatchCount)
+        assertEquals(listOf("Action", "Sci-Fi"), parsed[0].genres)
+
+        val xml = ListExportCodec.toMalXml(listOf(entry))
+        val malParsed = MalParser.parse(xml.byteInputStream())
+        assertEquals(1, malParsed.size)
+        assertEquals(1, malParsed[0].malId)
+        assertEquals(WatchStatus.COMPLETED, malParsed[0].status)
+    }
+
+    @Test fun coverPaletteExtractsVibrantColour() {
+        val grey = 0xFF333333.toInt()
+        val vibrantCyan = 0xFF00E5FF.toInt()
+        val extracted = CoverPalette.extractFromArgb(intArrayOf(grey, grey, vibrantCyan))
+        assertNotNull(extracted)
+    }
+
+    @Test fun airingWidgetShowsBehindCount() {
+        val text = AiringWidgetText.row("Frieren", 5, "in 2h 0m", behind = 2)
+        assertTrue(text.contains("2 behind"))
+    }
+
+    @Test fun liquidGlassPaletteAndTintConfig() {
+        assertEquals(Palette.LIQUID_GLASS, Palette.parse("liquid_glass"))
+        assertEquals(LiquidGlassTint.SAKURA, LiquidGlassTint.parse("sakura"))
+        assertEquals(LiquidGlassTint.AURORA, LiquidGlassTint.parse("unknown"))
+        val cfg = LiquidGlassConfig(enabled = true, tint = LiquidGlassTint.CRYSTAL, opacityPct = 30, specularPct = 80)
+        assertEquals(0.30f, cfg.panelAlpha, 0.001f)
+        assertEquals(0.80f, cfg.specularIntensity, 0.001f)
     }
 }

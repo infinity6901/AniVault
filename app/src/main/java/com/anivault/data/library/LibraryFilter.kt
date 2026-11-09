@@ -2,6 +2,9 @@ package com.anivault.data.library
 
 import com.anivault.data.local.entity.AnimeEntry
 import com.anivault.data.local.model.WatchStatus
+import org.json.JSONArray
+import org.json.JSONObject
+import kotlin.random.Random
 
 enum class LibrarySort(val label: String) {
     UPDATED("Recently updated"),
@@ -28,6 +31,85 @@ data class LibraryQuery(
 ) {
     val activeFilterCount: Int
         get() = listOfNotNull(format, year, genre, tag, minRating, source).size
+}
+
+/** A user-pinned filter combination shown as a one-tap chip on the Library screen. */
+data class SmartListPreset(
+    val name: String,
+    val status: WatchStatus? = null,
+    val format: String? = null,
+    val genre: String? = null,
+    val tag: String? = null,
+    val minRating: Float? = null
+) {
+    fun toQuery(currentSort: LibrarySort): LibraryQuery = LibraryQuery(
+        status = status, format = format, genre = genre, tag = tag, minRating = minRating, sort = currentSort
+    )
+
+    fun matches(q: LibraryQuery): Boolean =
+        q.status == status && q.format == format && q.genre == genre && q.tag == tag && q.minRating == minRating
+}
+
+object SmartLists {
+    fun parse(raw: String): List<SmartListPreset> {
+        if (raw.isBlank()) return defaults()
+        val arr = runCatching { JSONArray(raw) }.getOrNull() ?: return defaults()
+        val out = ArrayList<SmartListPreset>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val name = o.optString("name").trim()
+            if (name.isEmpty()) continue
+            out += SmartListPreset(
+                name = name,
+                status = o.optString("status").takeIf { it.isNotBlank() }?.let { WatchStatus.parse(it) },
+                format = o.optString("format").takeIf { it.isNotBlank() },
+                genre = o.optString("genre").takeIf { it.isNotBlank() },
+                tag = o.optString("tag").takeIf { it.isNotBlank() },
+                minRating = o.optDouble("minRating", -1.0).takeIf { it >= 0.0 }?.toFloat()
+            )
+        }
+        return out
+    }
+
+    fun encode(list: List<SmartListPreset>): String {
+        val arr = JSONArray()
+        list.forEach { p ->
+            arr.put(
+                JSONObject().apply {
+                    put("name", p.name)
+                    p.status?.let { put("status", it.name) }
+                    p.format?.let { put("format", it) }
+                    p.genre?.let { put("genre", it) }
+                    p.tag?.let { put("tag", it) }
+                    p.minRating?.let { put("minRating", it.toDouble()) }
+                }
+            )
+        }
+        return arr.toString()
+    }
+
+    fun defaults(): List<SmartListPreset> = listOf(
+        SmartListPreset("Movies", format = "Movie"),
+        SmartListPreset("Top Rated (8+)", minRating = 8f)
+    )
+
+    /** Picks a random entry matching the "Spin the Wheel" constraints. */
+    fun pickRandom(
+        all: List<AnimeEntry>,
+        status: WatchStatus? = WatchStatus.PLAN_TO_WATCH,
+        maxEpisodes: Int? = null,
+        genre: String? = null,
+        format: String? = null,
+        random: Random = Random.Default
+    ): AnimeEntry? {
+        val pool = all.filter { e ->
+            (status == null || e.status == status) &&
+                (maxEpisodes == null || (e.totalEpisodes in 1..maxEpisodes)) &&
+                (genre.isNullOrBlank() || e.genres.any { it.equals(genre, ignoreCase = true) }) &&
+                (format.isNullOrBlank() || e.format.equals(format, ignoreCase = true))
+        }
+        return if (pool.isEmpty()) null else pool[random.nextInt(pool.size)]
+    }
 }
 
 /** Pure filtering/sorting for the Library screen (unit-tested). */

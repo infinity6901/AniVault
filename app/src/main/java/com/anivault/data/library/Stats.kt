@@ -18,7 +18,11 @@ data class LibraryStats(
     val averageRating: Float?,
     /** index 1..10 → count (index 0 unused = 0). */
     val ratingHistogram: List<Int>,
-    val topGenres: List<Pair<String, Int>>
+    val topGenres: List<Pair<String, Int>>,
+    /** Total number of rewatches across all entries. */
+    val totalRewatches: Int = 0,
+    /** Number of distinct titles rewatched at least once. */
+    val rewatchedTitles: Int = 0
 )
 
 object StatsCalculator {
@@ -32,6 +36,12 @@ object StatsCalculator {
 
     fun effectiveMinutes(e: AnimeEntry): Int = if (e.durationMinutes > 0) e.durationMinutes else typicalMinutes(e.format)
 
+    /** Total episodes watched including completed rewatch cycles. */
+    fun totalWatchedWithRewatches(e: AnimeEntry): Int {
+        val perRewatch = if (e.totalEpisodes > 0) e.totalEpisodes else e.watchedEpisodes
+        return e.watchedEpisodes + (e.rewatchCount.coerceAtLeast(0) * perRewatch)
+    }
+
     fun compute(all: List<AnimeEntry>): LibraryStats {
         val rated = all.filter { it.rating > 0f }
         val hist = MutableList(11) { 0 }
@@ -39,17 +49,19 @@ object StatsCalculator {
         return LibraryStats(
             total = all.size,
             byStatus = WatchStatus.values().associateWith { s -> all.count { it.status == s } },
-            episodesWatched = all.sumOf { it.watchedEpisodes },
-            watchMinutes = all.sumOf { it.watchedEpisodes.toLong() * it.durationMinutes },
-            entriesMissingDuration = all.count { it.watchedEpisodes > 0 && it.durationMinutes <= 0 },
-            estimatedMinutes = all.filter { it.durationMinutes <= 0 }.sumOf { it.watchedEpisodes.toLong() * typicalMinutes(it.format) },
+            episodesWatched = all.sumOf { totalWatchedWithRewatches(it) },
+            watchMinutes = all.sumOf { totalWatchedWithRewatches(it).toLong() * it.durationMinutes },
+            entriesMissingDuration = all.count { totalWatchedWithRewatches(it) > 0 && it.durationMinutes <= 0 },
+            estimatedMinutes = all.filter { it.durationMinutes <= 0 }.sumOf { totalWatchedWithRewatches(it).toLong() * typicalMinutes(it.format) },
             remainingMinutes = all.filter { it.totalEpisodes > 0 && (it.status == WatchStatus.WATCHING || it.status == WatchStatus.PLAN_TO_WATCH) }
                 .sumOf { (it.totalEpisodes - it.watchedEpisodes).coerceAtLeast(0).toLong() * effectiveMinutes(it) },
             averageRating = if (rated.isEmpty()) null else rated.map { it.rating }.average().toFloat(),
             ratingHistogram = hist,
             topGenres = all.flatMap { it.genres }.filter { it.isNotBlank() }
                 .groupingBy { it }.eachCount().entries.sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
-                .take(6).map { it.key to it.value }
+                .take(6).map { it.key to it.value },
+            totalRewatches = all.sumOf { it.rewatchCount.coerceAtLeast(0) },
+            rewatchedTitles = all.count { it.rewatchCount > 0 }
         )
     }
 }

@@ -55,6 +55,14 @@
         </activity>
 
         <receiver
+            android:name=".notify.EpisodeActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.anivault.notify.MARK_WATCHED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
             android:name=".widget.ProgressWidget"
             android:exported="false">
             <intent-filter>

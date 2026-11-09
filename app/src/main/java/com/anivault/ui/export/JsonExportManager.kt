@@ -7,6 +7,8 @@ import com.anivault.data.local.entity.HVaultEntry
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.text.SimpleDateFormat
 import java.util.*
@@ -38,20 +40,20 @@ class JsonExportManager @Inject constructor(
     // ── Export ─────────────────────────────────────────────────────────────
 
     fun exportAnimeJson(entries: List<AnimeEntry>): Boolean = runCatching {
-        val fileName = "AniVault_Anime_${dateFormat.format(Date())}.json"
+        val fileName = "AniVault_Anime_${synchronized(dateFormat) { dateFormat.format(Date()) }}.json"
         val json     = gson.toJson(VaultExport(anime = entries))
         writeJson(json, fileName)
     }.isSuccess
 
     fun exportHVaultJson(entries: List<HVaultEntry>): Boolean = runCatching {
-        val fileName = "AniVault_HVault_${dateFormat.format(Date())}.json"
+        val fileName = "AniVault_HVault_${synchronized(dateFormat) { dateFormat.format(Date()) }}.json"
         val json     = gson.toJson(VaultExport(hvault = entries))
         writeJson(json, fileName)
     }.isSuccess
 
     /** Export both vaults in one file (preferred for full backup). */
     fun exportAll(anime: List<AnimeEntry>, hvault: List<HVaultEntry>): Boolean = runCatching {
-        val fileName = "AniVault_Backup_${dateFormat.format(Date())}.json"
+        val fileName = "AniVault_Backup_${synchronized(dateFormat) { dateFormat.format(Date()) }}.json"
         val json     = gson.toJson(VaultExport(anime = anime, hvault = hvault))
         writeJson(json, fileName)
     }.isSuccess
@@ -64,19 +66,40 @@ class JsonExportManager @Inject constructor(
     )
 
     fun importFromUri(uri: Uri): ImportResult? = runCatching {
-        val json = context.contentResolver.openInputStream(uri)?.use(InputStream::readBytes)
+        val json = context.contentResolver.openInputStream(uri)?.use { readBounded(it) }
             ?.toString(Charsets.UTF_8) ?: return null
         if (json.isBlank()) return null
 
         val export = gson.fromJson<VaultExport>(json, VaultExport::class.java) ?: return null
-        ImportResult(anime = export.anime.orEmpty(), hvault = export.hvault.orEmpty())
+        ImportResult(
+            anime = export.anime.orEmpty().filter { it.id.isNotBlank() && it.title.isNotBlank() },
+            hvault = export.hvault.orEmpty().filter { it.id.isNotBlank() && it.title.isNotBlank() }
+        )
     }.getOrNull()
 
     // ── Util ───────────────────────────────────────────────────────────────
+
+    private fun readBounded(input: InputStream): ByteArray {
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(8192)
+        var total = 0
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            total += n
+            if (total > MAX_JSON_BYTES) throw IOException("JSON file exceeds maximum size")
+            out.write(buf, 0, n)
+        }
+        return out.toByteArray()
+    }
 
     private fun writeJson(json: String, fileName: String) {
         DownloadsWriter.write(context, fileName, "application/json") { out ->
             out.write(json.toByteArray(Charsets.UTF_8))
         }
+    }
+
+    private companion object {
+        const val MAX_JSON_BYTES = 50 * 1024 * 1024
     }
 }

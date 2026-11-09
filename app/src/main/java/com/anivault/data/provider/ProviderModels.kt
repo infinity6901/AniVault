@@ -144,6 +144,8 @@ interface ProviderAdapter {
     val sections: Set<BrowseSection>
     suspend fun search(query: String, page: Int): PagedResult
     suspend fun browse(section: BrowseSection, page: Int): PagedResult
+    /** Browses a specific archive [season] ("WINTER", "SPRING", "SUMMER", "FALL") and [year]. */
+    suspend fun browseSeason(year: Int, season: String, page: Int): PagedResult = browse(BrowseSection.SEASONAL, page)
     /** Lightweight request that also validates the response shape. Throws [ProviderException]. */
     suspend fun check()
 }

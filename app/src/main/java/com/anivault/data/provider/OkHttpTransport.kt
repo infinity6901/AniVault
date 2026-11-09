@@ -4,6 +4,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Dns
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -30,6 +31,7 @@ class OkHttpTransport(
         .dns(SafeDns)
         .followRedirects(true)
         .followSslRedirects(false) // never follow https → http
+        .addNetworkInterceptor(RedirectGuardInterceptor)
         .build()
 
     override suspend fun execute(request: HttpRequestSpec): HttpResult {
@@ -48,12 +50,21 @@ class OkHttpTransport(
             builder.get()
         }
         val secs = timeoutSeconds().coerceIn(5, 60)
+        val builtRequest = builder.build()
+        val initialHost = builtRequest.url.host
         val call = client.newBuilder()
             .connectTimeout(secs.toLong(), TimeUnit.SECONDS)
             .readTimeout(secs.toLong(), TimeUnit.SECONDS)
             .callTimeout((secs + 5).toLong(), TimeUnit.SECONDS)
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val sanitized = if (!req.url.host.equals(initialHost, ignoreCase = true)) {
+                    req.newBuilder().removeHeader("Authorization").removeHeader("X-MAL-CLIENT-ID").build()
+                } else req
+                chain.proceed(sanitized)
+            }
             .build()
-            .newCall(builder.build())
+            .newCall(builtRequest)
 
         return suspendCancellableCoroutine { cont ->
             cont.invokeOnCancellation { runCatching { call.cancel() } }
@@ -76,12 +87,21 @@ class OkHttpTransport(
                 override fun onResponse(call: Call, response: Response) {
                     response.use { r ->
                         try {
-                            val length = r.body?.contentLength() ?: -1L
+                            val bodyObj = r.body
+                            val length = bodyObj?.contentLength() ?: -1L
                             if (length > MAX_BODY_BYTES) {
                                 cont.resumeWithException(ProviderException(FailureKind.MALFORMED, "Response too large"))
                                 return
                             }
-                            val body = r.body?.string().orEmpty()
+                            val source = bodyObj?.source()
+                            if (source != null) {
+                                source.request(MAX_BODY_BYTES + 1L)
+                                if (source.buffer.size > MAX_BODY_BYTES) {
+                                    cont.resumeWithException(ProviderException(FailureKind.MALFORMED, "Response too large"))
+                                    return
+                                }
+                            }
+                            val body = bodyObj?.string().orEmpty()
                             val headers = r.headers.toMultimap().mapValues { it.value.firstOrNull().orEmpty() }
                             cont.resume(HttpResult(r.code, body, headers))
                         } catch (e: IOException) {
@@ -95,20 +115,70 @@ class OkHttpTransport(
 
     private companion object {
         const val MAX_BODY_BYTES = 8L * 1024 * 1024
-        const val USER_AGENT = "AniVault/1.1 (Android)"
+        const val USER_AGENT = "AniVault/1.2 (Android)"
+    }
+}
+
+/** Rejects redirects to plain HTTP or private/local hosts before sending the redirected request. */
+private object RedirectGuardInterceptor : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val req = chain.request()
+        if (!req.url.scheme.equals("https", ignoreCase = true)) {
+            throw IOException("Blocked non-HTTPS request or redirect")
+        }
+        if (SourceValidator.isPrivateHost(req.url.host)) {
+            throw UnknownHostException("Blocked a private network address")
+        }
+        return chain.proceed(req)
     }
 }
 
 /**
- * Blocks DNS answers that resolve to loopback / private / link-local addresses so a configured
- * source can't be pointed at the user's local network (SSRF-style abuse).
+ * Blocks DNS answers that resolve to loopback / private / link-local / CGNAT / unique-local addresses
+ * (including IPv4-mapped IPv6 addresses) so a configured source can't be pointed at the user's local network.
  */
 object SafeDns : Dns {
     override fun lookup(hostname: String): List<InetAddress> {
+        if (SourceValidator.isPrivateHost(hostname)) {
+            throw UnknownHostException("Blocked a private network address")
+        }
         val addresses = Dns.SYSTEM.lookup(hostname)
-        if (addresses.any { it.isLoopbackAddress || it.isAnyLocalAddress || it.isLinkLocalAddress || it.isSiteLocalAddress }) {
+        if (addresses.any { isPrivateAddress(it) }) {
             throw UnknownHostException("Blocked a private network address")
         }
         return addresses
     }
+
+    fun isPrivateAddress(addr: InetAddress): Boolean {
+        if (addr.isLoopbackAddress || addr.isAnyLocalAddress || addr.isLinkLocalAddress ||
+            addr.isSiteLocalAddress || addr.isMulticastAddress
+        ) return true
+        val raw = addr.address
+        if (raw.size == 4) {
+            return isPrivateIpv4Bytes(raw[0].toInt() and 0xff, raw[1].toInt() and 0xff)
+        }
+        if (raw.size == 16) {
+            val b0 = raw[0].toInt() and 0xff
+            val b1 = raw[1].toInt() and 0xff
+            // Unique local fc00::/7 or link-local fe80::/10
+            if ((b0 and 0xfe) == 0xfc) return true
+            if (b0 == 0xfe && (b1 and 0xc0) == 0x80) return true
+            // IPv4-mapped (::ffff:a.b.c.d) or IPv4-compatible (::a.b.c.d)
+            val prefixZeros = (0 until 10).all { raw[it].toInt() == 0 }
+            val mapped = prefixZeros && (raw[10].toInt() and 0xff) == 0xff && (raw[11].toInt() and 0xff) == 0xff
+            val compat = prefixZeros && raw[10].toInt() == 0 && raw[11].toInt() == 0
+            if (mapped || compat) {
+                return isPrivateIpv4Bytes(raw[12].toInt() and 0xff, raw[13].toInt() and 0xff)
+            }
+        }
+        return false
+    }
+
+    private fun isPrivateIpv4Bytes(o0: Int, o1: Int): Boolean =
+        o0 == 0 || o0 == 10 || o0 == 127 ||
+            (o0 == 169 && o1 == 254) ||
+            (o0 == 172 && o1 in 16..31) ||
+            (o0 == 192 && o1 == 168) ||
+            (o0 == 100 && o1 in 64..127) ||
+            o0 >= 224
 }
