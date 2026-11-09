@@ -77,7 +77,7 @@ object CoverPalette {
             val s = hsv[1]
             val v = hsv[2]
             // Ignore near-black, near-white, or washed-out grey pixels.
-            if (s < 0.22f || v < 0.20f || v > 0.96f) continue
+            if (s < 0.22f || v < 0.20f) continue
             val score = s * (1f - abs(v - 0.65f))
             if (score > bestScore) {
                 bestScore = score
