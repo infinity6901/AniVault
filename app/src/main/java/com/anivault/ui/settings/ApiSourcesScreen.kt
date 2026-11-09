@@ -29,6 +29,7 @@ import com.anivault.data.provider.CheckResult
 import com.anivault.data.provider.*
 import com.anivault.ui.common.*
 import com.anivault.ui.theme.AniVaultColors
+import androidx.compose.ui.graphics.Color
 import com.anivault.ui.theme.dim
 import com.anivault.ui.theme.TrackGlassOverlay
 import dagger.hilt.android.lifecycle.HiltViewModel
