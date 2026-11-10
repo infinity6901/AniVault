@@ -973,11 +973,9 @@ object AniyomiAdaptiveParser {
 
         // Layer 2: Synopsis neighborhood (for Tailwind carousels placed right below the synopsis paragraph, as on watchhentai.net/series/...)
         if (results.isEmpty()) {
-            val synopsisParas = doc.select("p").filter {
-                val t = it.text().trim()
-                t.length > 40 && !t.contains("Watch Hentai is an English subtitled", ignoreCase = true)
-            }
-            for (p in synopsisParas) {
+            for (p in doc.select("p")) {
+                val t = p.text().trim()
+                if (t.length <= 40 || t.contains("Watch Hentai is an English subtitled", ignoreCase = true)) continue
                 var anc: Element? = p.parent()
                 repeat(3) {
                     if (anc != null && anc!!.tagName() != "body" && anc!!.tagName() != "html") {
