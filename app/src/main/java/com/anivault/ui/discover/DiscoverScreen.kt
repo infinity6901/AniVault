@@ -226,7 +226,7 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
     LaunchedEffect(nearEnd) { if (nearEnd) viewModel.loadMore() }
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background, snackbarHost = { SnackbarHost(snackbar) },
+        containerColor = MaterialTheme.colorScheme.background, snackbarHost = { SnackbarHost(snackbar, Modifier.padding(bottom = bottomTabContentPadding(0.dp))) },
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             TopAppBar(title = { Text("Discover", fontWeight = FontWeight.Bold) }, actions = {
@@ -285,7 +285,7 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
                     "Couldn't reach your sources", viewModel::retry,
                     detail = st.failures.joinToString("\n") { "${it.sourceName}: ${it.kind.label}" }
                 )
-                DiscoverStatus.Content -> LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 104.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                DiscoverStatus.Content -> LazyColumn(state = listState, contentPadding = PaddingValues(bottom = bottomTabContentPadding(28.dp)), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item(key = "header") { header() }
                     items(sortedItems, key = { it.canonicalId }) { a -> Box(Modifier.padding(horizontal = 16.dp)) { ResultRow(a, a.canonicalId in ui.inLibrary) { detail = a } } }
                     if (ui.loadingMore) item { LoadingBox() }
@@ -312,25 +312,32 @@ private fun SeasonArchiveBar(
 ) {
     val cur = remember { Seasons.current() }
     val isCurrent = year == cur.year && season.equals(cur.name, ignoreCase = true)
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            IconButton(onClick = { onSelect(year - 1, season) }, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Default.ChevronLeft, "Previous year")
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { onSelect(year - 1, season) }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.ChevronLeft, "Previous year")
+                }
+                Text("$year", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                IconButton(onClick = { onSelect(year + 1, season) }, enabled = year <= cur.year, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.ChevronRight, "Next year")
+                }
             }
-            Text("$year", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-            IconButton(onClick = { onSelect(year + 1, season) }, enabled = year <= cur.year, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Default.ChevronRight, "Next year")
-            }
-            Spacer(Modifier.width(4.dp))
-            ARCHIVE_SEASONS.forEach { (key, label) ->
-                FilterChip(
-                    selected = season.equals(key, ignoreCase = true),
-                    onClick = { onSelect(year, key) },
-                    label = { Text(label, fontSize = 12.sp) }
-                )
-            }
-            if (!isCurrent) {
-                TextButton(onClick = onReset) { Text("Now", fontSize = 12.sp) }
+        }
+        items(ARCHIVE_SEASONS, key = { it.first }) { (key, label) ->
+            FilterChip(
+                selected = season.equals(key, ignoreCase = true),
+                onClick = { onSelect(year, key) },
+                label = { Text(label, fontSize = 12.sp, maxLines = 1, softWrap = false) }
+            )
+        }
+        if (!isCurrent) {
+            item {
+                TextButton(onClick = onReset) { Text("Now", fontSize = 12.sp, maxLines = 1, softWrap = false) }
             }
         }
     }

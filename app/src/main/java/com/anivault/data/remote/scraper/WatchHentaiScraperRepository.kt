@@ -1,7 +1,11 @@
 package com.anivault.data.remote.scraper
 
 import com.anivault.core.AppPrefs
+import com.anivault.core.Sanitizer
+import com.anivault.data.provider.SourceValidator
 import com.anivault.data.remote.model.ScrapedEntry
+import com.anivault.data.remote.model.VaultEpisodePreview
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -18,6 +22,56 @@ import javax.inject.Inject
 import javax.inject.Named
 import javax.inject.Singleton
 
+data class MirrorTestResult(
+    val ok: Boolean,
+    val message: String,
+    val durationMs: Long = 0L
+)
+
+/**
+ * Pure, JVM-testable helper for managing, normalizing, and validating custom scraper mirror URLs.
+ */
+object CustomMirrorUrls {
+
+    fun parseList(raw: String): List<String> =
+        raw.split(",", ";", "\n", " ")
+            .map { it.trim().trimEnd('/') }
+            .filter { it.startsWith("https://") && it.toHttpUrlOrNull() != null }
+            .distinct()
+
+    fun encodeList(urls: List<String>): String =
+        urls.map { it.trim().trimEnd('/') }.filter { it.isNotEmpty() }.distinct().joinToString(",")
+
+    /**
+     * Validates and normalizes a user-entered mirror URL:
+     *  - Auto-prepends `https://` if no scheme is given
+     *  - Rejects plain `http://` or non-HTTPS URLs
+     *  - Rejects private/loopback/local network hosts via [SourceValidator.isPrivateHost]
+     */
+    fun normalizeAndValidate(input: String): Result<String> {
+        val raw = input.trim().trimEnd('/')
+        if (raw.isEmpty()) return Result.failure(IllegalArgumentException("Enter a mirror URL"))
+        if (raw.startsWith("http://", ignoreCase = true)) {
+            return Result.failure(IllegalArgumentException("Mirror URL must use https://"))
+        }
+        val withScheme = if (raw.contains("://")) raw else "https://$raw"
+        val parsed = withScheme.toHttpUrlOrNull()
+            ?: return Result.failure(IllegalArgumentException("Invalid URL format"))
+        if (!parsed.scheme.equals("https", ignoreCase = true)) {
+            return Result.failure(IllegalArgumentException("Mirror URL must use https://"))
+        }
+        if (parsed.host.isBlank() || !parsed.host.contains(".")) {
+            return Result.failure(IllegalArgumentException("Enter a valid domain name"))
+        }
+        if (SourceValidator.isPrivateHost(parsed.host)) {
+            return Result.failure(IllegalArgumentException("Private or local network addresses are not allowed"))
+        }
+        val cleanPath = parsed.encodedPath.trimEnd('/')
+        val normalized = "https://${parsed.host.lowercase()}${if (parsed.port != 443) ":${parsed.port}" else ""}$cleanPath"
+        return Result.success(normalized)
+    }
+}
+
 /**
  * Self-healing multi-engine scraper modelled on the Aniyomi community extension architecture
  * (`eu.kanade.tachiyomi.animeextension.all.watchhentai` / `hentaihaven` / `dooplay` / `madara` / `wpjson`).
@@ -28,7 +82,7 @@ class WatchHentaiScraperRepository @Inject constructor(
     private val prefs: AppPrefs
 ) : HentaiSource {
 
-    override val sourceName: String = "Aniyomi Multi-Mirror (WatchHentai / HentaiHaven)"
+    override val sourceName: String = "watchhentai.net"
 
     companion object {
         const val BASE_URL = "https://watchhentai.net"
@@ -47,13 +101,65 @@ class WatchHentaiScraperRepository @Inject constructor(
     }
 
     private fun activeMirrors(): List<String> {
-        val custom = runCatching {
-            prefs.vaultCustomMirrors
-                .split(",", ";", "\n", " ")
-                .map { it.trim().trimEnd('/') }
-                .filter { it.startsWith("https://") && it.toHttpUrlOrNull() != null }
-        }.getOrDefault(emptyList())
+        val custom = runCatching { CustomMirrorUrls.parseList(prefs.vaultCustomMirrors) }.getOrDefault(emptyList())
         return (custom + DEFAULT_MIRRORS).distinct()
+    }
+
+    /**
+     * Tests whether the Aniyomi multi-engine scraper works on [rawMirrorUrl] by probing
+     * WP-JSON REST API, DooPlay Search API, and Adaptive HTML extraction.
+     */
+    suspend fun testMirror(rawMirrorUrl: String): MirrorTestResult = withContext(Dispatchers.IO) {
+        val normalized = CustomMirrorUrls.normalizeAndValidate(rawMirrorUrl).getOrElse { err ->
+            return@withContext MirrorTestResult(false, err.message ?: "Invalid URL", 0L)
+        }
+        val t0 = System.currentTimeMillis()
+        var lastError: String? = null
+
+        try {
+            // 1. Probe WordPress Core REST API
+            val wpResults = runCatching {
+                val wpUrl = "$normalized/wp-json/wp/v2/posts?per_page=5&_embed=1"
+                val body = fetchRaw(wpUrl, normalized, acceptJson = true)
+                AniyomiAdaptiveParser.parseWpJsonPosts(body, normalized)
+            }.onFailure { lastError = it.message }.getOrDefault(emptyList())
+            if (wpResults.isNotEmpty()) {
+                val dt = System.currentTimeMillis() - t0
+                return@withContext MirrorTestResult(true, "Working · ${wpResults.size} covers via WP-JSON (${dt} ms)", dt)
+            }
+
+            // 2. Probe DooPlay AJAX Search API
+            val dpResults = runCatching {
+                val dpUrl = "$normalized/wp-json/dooplay/search/?keyword=a&nonce=ani"
+                val body = fetchRaw(dpUrl, normalized, acceptJson = true)
+                AniyomiAdaptiveParser.parseDooPlaySearchJson(body, normalized)
+            }.onFailure { if (lastError == null) lastError = it.message }.getOrDefault(emptyList())
+            if (dpResults.isNotEmpty()) {
+                val dt = System.currentTimeMillis() - t0
+                return@withContext MirrorTestResult(true, "Working · ${dpResults.size} covers via DooPlay API (${dt} ms)", dt)
+            }
+
+            // 3. Probe Adaptive Multi-Theme HTML search & homepage
+            for (probeUrl in listOf("$normalized/?s=a", "$normalized/")) {
+                val htmlResults = runCatching {
+                    val html = fetchRaw(probeUrl, normalized, acceptJson = false)
+                    AniyomiAdaptiveParser.parseAdaptiveHtml(html, normalized)
+                }.onFailure { lastError = it.message }.getOrDefault(emptyList())
+                if (htmlResults.isNotEmpty()) {
+                    val dt = System.currentTimeMillis() - t0
+                    return@withContext MirrorTestResult(true, "Working · ${htmlResults.size} covers via Adaptive HTML (${dt} ms)", dt)
+                }
+            }
+
+            val dt = System.currentTimeMillis() - t0
+            val reason = Sanitizer.clean(lastError, 80).ifBlank { "No scraper covers found at this URL" }
+            MirrorTestResult(false, reason, dt)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (e: Exception) {
+            val dt = System.currentTimeMillis() - t0
+            MirrorTestResult(false, Sanitizer.clean(e.message, 80).ifBlank { "Connection failed" }, dt)
+        }
     }
 
     override suspend fun search(query: String, page: Int): List<ScrapedEntry> =
@@ -174,6 +280,11 @@ object AniyomiAdaptiveParser {
         "src"
     )
 
+    fun sourceLabelFromUrl(url: String): String =
+        runCatching { java.net.URI(url).host?.removePrefix("www.").orEmpty() }
+            .getOrDefault("")
+            .ifBlank { "watchhentai.net" }
+
     /**
      * Strips WordPress auto-generated thumbnail size suffixes (`-150x150`, `-185x278`, `-300x420`)
      * and upgrades protocol-relative URLs to `https://` so H-Vault always gets crisp, full-resolution
@@ -203,6 +314,7 @@ object AniyomiAdaptiveParser {
         if (!trimmed.startsWith("[")) return emptyList()
         val arr = runCatching { JSONArray(trimmed) }.getOrNull() ?: return emptyList()
         val out = ArrayList<ScrapedEntry>(arr.length())
+        val srcLabel = sourceLabelFromUrl(baseUrl)
 
         for (i in 0 until arr.length()) {
             val obj = arr.optJSONObject(i) ?: continue
@@ -217,11 +329,48 @@ object AniyomiAdaptiveParser {
                 ?: obj.optString("title")
             val cleanTitle = Jsoup.parse(rawTitle).text().trim()
                 .replace(Regex("""\s*[-–|]\s*Watch\s+Hentai.*$""", RegexOption.IGNORE_CASE), "")
-                
             if (cleanTitle.isEmpty()) continue
 
             val coverUrl = extractWpFeaturedMedia(obj, baseUrl)
             if (coverUrl.isBlank()) continue
+
+            val excerptHtml = obj.optJSONObject("excerpt")?.optString("rendered").orEmpty()
+            val contentHtml = obj.optJSONObject("content")?.optString("rendered").orEmpty()
+            val synopsis = Jsoup.parse(excerptHtml.ifBlank { contentHtml }).text().trim()
+            val dateStr = obj.optString("date").trim().take(10)
+            val releaseYear = dateStr.take(4).toIntOrNull()
+
+            val contentImgs = if (contentHtml.isNotBlank()) {
+                Jsoup.parse(contentHtml, baseUrl).select("img").mapNotNull { img ->
+                    extractImageFromElement(img, baseUrl).takeIf { it.isNotBlank() }
+                }.distinct()
+            } else emptyList()
+
+            val previews = if (contentImgs.isNotEmpty()) {
+                contentImgs.take(12).mapIndexed { idx, imgUrl ->
+                    VaultEpisodePreview(
+                        episodeNumber = idx + 1,
+                        title = "$cleanTitle · Preview ${idx + 1}",
+                        previewImageUrl = imgUrl,
+                        durationMinutes = 24,
+                        releaseDate = dateStr,
+                        detailUrl = link,
+                        sourceName = srcLabel
+                    )
+                }
+            } else {
+                listOf(
+                    VaultEpisodePreview(
+                        episodeNumber = HanimeAniyomiCodec.extractEpisodeNumber(cleanTitle, i + 1),
+                        title = cleanTitle,
+                        previewImageUrl = coverUrl,
+                        durationMinutes = 24,
+                        releaseDate = dateStr,
+                        detailUrl = link,
+                        sourceName = srcLabel
+                    )
+                )
+            }
 
             val isCensored = cleanTitle.contains("censored", ignoreCase = true) &&
                 !cleanTitle.contains("uncensored", ignoreCase = true)
@@ -234,8 +383,13 @@ object AniyomiAdaptiveParser {
                 studio = null,
                 isCensored = isCensored,
                 episodeCount = 1,
-                durationMinutes = 0,
-                detailUrl = link
+                durationMinutes = 24,
+                detailUrl = link,
+                sourceName = srcLabel,
+                synopsis = synopsis,
+                previewUrl = contentImgs.firstOrNull() ?: coverUrl,
+                releaseYear = releaseYear,
+                episodePreviews = previews
             )
         }
         return out
@@ -280,6 +434,7 @@ object AniyomiAdaptiveParser {
         if (!trimmed.startsWith("{")) return emptyList()
         val root = runCatching { JSONObject(trimmed) }.getOrNull() ?: return emptyList()
         val out = mutableListOf<ScrapedEntry>()
+        val srcLabel = sourceLabelFromUrl(baseUrl)
         val keys = root.keys()
         while (keys.hasNext()) {
             val key = keys.next()
@@ -288,7 +443,7 @@ object AniyomiAdaptiveParser {
             if (rawTitle.isBlank()) continue
             val cleanTitle = Jsoup.parse(rawTitle).text().trim()
             val url = item.optString("url").trim()
-            if (cleanTitle.isEmpty()) continue
+            if (url.isEmpty()) continue
             val rawImg = item.optString("img").trim()
             val cover = upgradeWordPressCoverUrl(rawImg, baseUrl)
             if (cover.isBlank()) continue
@@ -304,7 +459,8 @@ object AniyomiAdaptiveParser {
                 isCensored = isCensored,
                 episodeCount = 1,
                 durationMinutes = 0,
-                detailUrl = url
+                detailUrl = url,
+                sourceName = srcLabel
             )
         }
         return out
@@ -381,7 +537,8 @@ object AniyomiAdaptiveParser {
                 isCensored = isCensored,
                 episodeCount = epCount,
                 durationMinutes = 0,
-                detailUrl = href
+                detailUrl = href,
+                sourceName = sourceLabelFromUrl(baseUrl)
             )
         }.getOrNull()
     }
@@ -389,6 +546,7 @@ object AniyomiAdaptiveParser {
     private fun parseJsonLdItems(doc: Document, baseUrl: String): List<ScrapedEntry> {
         val scripts = doc.select("script[type=application/ld+json]")
         val results = mutableListOf<ScrapedEntry>()
+        val srcLabel = sourceLabelFromUrl(baseUrl)
         for (script in scripts) {
             val raw = script.data().trim()
             if (raw.isEmpty()) continue
@@ -400,13 +558,13 @@ object AniyomiAdaptiveParser {
                         val el = itemList.optJSONObject(i) ?: continue
                         val item = el.optJSONObject("item") ?: el
                         val url = item.optString("url").trim()
-            if (cleanTitle.isEmpty()) continue
+                        if (url.isEmpty()) continue
                         val name = item.optString("name").trim()
-            if (cleanTitle.isEmpty()) continue
+                        if (name.isEmpty()) continue
                         val image = item.optString("image").trim()
-            if (cleanTitle.isEmpty()) continue
+                        if (image.isEmpty()) continue
                         val slug = url.trimEnd('/').substringAfterLast("/")
-            if (cleanTitle.isEmpty()) continue
+                        if (slug.isEmpty()) continue
                         results += ScrapedEntry(
                             id = "watchhentai:$slug",
                             title = name,
@@ -416,7 +574,8 @@ object AniyomiAdaptiveParser {
                             isCensored = false,
                             episodeCount = 1,
                             durationMinutes = 0,
-                            detailUrl = url
+                            detailUrl = url,
+                            sourceName = srcLabel
                         )
                     }
                 }
@@ -455,9 +614,78 @@ object AniyomiAdaptiveParser {
             ?.text()
             ?.contains("yes", ignoreCase = true) == true
 
+        val srcLabel = sourceLabelFromUrl(baseUrl)
+        val synopsis = doc.select("div.wp-content p, div.description p, div.summary__content p, div.entry-content p, div.synopsis p")
+            .map { it.text().trim() }
+            .filter { it.length > 20 }
+            .joinToString("\n\n")
+            .ifBlank {
+                doc.selectFirst("meta[property=og:description], meta[name=description]")?.attr("content")?.trim().orEmpty()
+            }
+
+        val ratingScore = doc.selectFirst("span.dt_rating_vgs, span[itemprop=ratingValue], div.post-rating span.score")
+            ?.text()?.trim()?.toFloatOrNull() ?: 0f
+
+        val yearText = doc.selectFirst("span.date, div.extra span.date, div.item:contains(Release), div.post-content_item:contains(Release)")?.text().orEmpty()
+        val releaseYear = Regex("""\b(19\d{2}|20\d{2})\b""").find(yearText)?.value?.toIntOrNull()
+
+        val epPreviews = mutableListOf<VaultEpisodePreview>()
+        // 1. DooPlay / ToroPlay / AnimeStream episode rows
+        val epRows = doc.select("ul.episodios li, div.eplister ul li, li.wp-manga-chapter, div.episodes-list article")
+        epRows.forEachIndexed { idx, row ->
+            val epAnchor = row.selectFirst("div.episodiotitle a, a[href]")
+            val epHref = epAnchor?.attr("href")?.trim().orEmpty().let {
+                when {
+                    it.startsWith("http") -> it
+                    it.startsWith("/") -> "${baseUrl.trimEnd('/')}$it"
+                    it.isNotEmpty() -> "${baseUrl.trimEnd('/')}/$it"
+                    else -> detailUrl
+                }
+            }
+            val epTitle = epAnchor?.text()?.trim()?.ifBlank { null }
+                ?: row.selectFirst("div.numerando, span.epnum")?.text()?.trim()
+                ?: "Episode ${idx + 1}"
+            val numText = row.selectFirst("div.numerando, span.epnum")?.text().orEmpty()
+            val epNum = Regex("""\d+""").findAll(numText).lastOrNull()?.value?.toIntOrNull()
+                ?: HanimeAniyomiCodec.extractEpisodeNumber(epTitle, idx + 1)
+            val epDate = row.selectFirst("span.date, span.chapter-release-date")?.text()?.trim().orEmpty()
+            val epImgEl = row.selectFirst("div.imagen img, img")
+            val epImg = (if (epImgEl != null) extractImageFromElement(epImgEl, baseUrl) else "").ifBlank { cover }
+            if (epImg.isNotBlank()) {
+                epPreviews += VaultEpisodePreview(
+                    episodeNumber = epNum,
+                    title = epTitle,
+                    previewImageUrl = epImg,
+                    durationMinutes = 24,
+                    releaseDate = epDate,
+                    detailUrl = epHref,
+                    sourceName = srcLabel
+                )
+            }
+        }
+
+        // 2. Gallery / Content screenshots if no separate episode thumbnails were found
+        if (epPreviews.isEmpty()) {
+            val galleryImgs = doc.select("div.galeria img, div.g-item img, div.screenshots img, div.wp-content img")
+                .mapNotNull { extractImageFromElement(it, baseUrl).takeIf(String::isNotBlank) }
+                .filter { it != cover }
+                .distinct()
+            galleryImgs.take(12).forEachIndexed { idx, imgUrl ->
+                epPreviews += VaultEpisodePreview(
+                    episodeNumber = idx + 1,
+                    title = "$title · Preview ${idx + 1}",
+                    previewImageUrl = imgUrl,
+                    durationMinutes = 24,
+                    releaseDate = releaseYear?.toString().orEmpty(),
+                    detailUrl = detailUrl,
+                    sourceName = srcLabel
+                )
+            }
+        }
+
         val epCount = doc.selectFirst("div.item:contains(Episodes), span.tick-eps")
             ?.text()?.filter { it.isDigit() }?.toIntOrNull()
-            ?: doc.select("ul.episodios li, li.wp-manga-chapter, div.eplister ul li").size.takeIf { it > 0 }
+            ?: epRows.size.takeIf { it > 0 }
             ?: 1
 
         return ScrapedEntry(
@@ -467,9 +695,15 @@ object AniyomiAdaptiveParser {
             tags = tags,
             studio = studio,
             isCensored = isCens,
-            episodeCount = epCount,
+            episodeCount = epCount.coerceAtLeast(epPreviews.size.coerceAtLeast(1)),
             durationMinutes = 24,
-            detailUrl = detailUrl
+            detailUrl = detailUrl,
+            sourceName = srcLabel,
+            synopsis = synopsis,
+            previewUrl = epPreviews.firstOrNull()?.previewImageUrl ?: cover,
+            releaseYear = releaseYear,
+            ratingScore = ratingScore,
+            episodePreviews = epPreviews.sortedBy { it.episodeNumber }
         )
     }
 

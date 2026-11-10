@@ -25,6 +25,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -254,10 +255,30 @@ fun CompactSearch(
     )
 }
 
+/**
+ * Bottom content padding for top-level tab screens (Home, Library, Discover, Settings)
+ * so the last item and ScrollToTop FAB always clear the bottom navigation bar
+ * (both when the floating Liquid Glass capsule dock is active and in standard bar mode).
+ */
+@Composable
+fun bottomTabContentPadding(extra: Dp = 28.dp): Dp {
+    val glass = LocalLiquidGlass.current
+    val sysBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    return if (glass.enabled && glass.floatingNav) {
+        sysBottom + 104.dp + extra
+    } else {
+        extra
+    }
+}
+
 /** Appears once the list is scrolled past a few rows; jumps back to the search and filters. */
 @Composable
-fun BoxScope.ScrollToTop(visible: Boolean, onClick: () -> Unit) {
-    androidx.compose.animation.AnimatedVisibility(visible, Modifier.align(Alignment.BottomEnd).padding(16.dp)) {
+fun BoxScope.ScrollToTop(visible: Boolean, inTabScreen: Boolean = true, onClick: () -> Unit) {
+    val bottomPad = if (inTabScreen) bottomTabContentPadding(16.dp) else 16.dp
+    androidx.compose.animation.AnimatedVisibility(
+        visible,
+        Modifier.align(Alignment.BottomEnd).padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = bottomPad)
+    ) {
         SmallFloatingActionButton(onClick = onClick) { Icon(Icons.Default.KeyboardArrowUp, "Back to search and filters") }
     }
 }

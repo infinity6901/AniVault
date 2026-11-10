@@ -93,7 +93,12 @@ open class ApiSourcesViewModel @Inject constructor(
 }
 
 @Composable
-fun ApiSourcesScreen(onBack: () -> Unit, embedded: Boolean = false, vm: ApiSourcesViewModel = hiltViewModel()) {
+fun ApiSourcesScreen(
+    onBack: () -> Unit,
+    embedded: Boolean = false,
+    vm: ApiSourcesViewModel = hiltViewModel(),
+    headerContent: (@Composable ColumnScope.() -> Unit)? = null
+) {
     val sources by vm.sources.collectAsStateWithLifecycle()
     val auto by vm.autoFallback.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<ApiSource?>(null) }
@@ -110,14 +115,23 @@ fun ApiSourcesScreen(onBack: () -> Unit, embedded: Boolean = false, vm: ApiSourc
         containerColor = MaterialTheme.colorScheme.background, snackbarHost = { SnackbarHost(snackbar) },
         contentWindowInsets = if (embedded) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets,
         topBar = {
-            TopAppBar(title = { Text(if (vm.store.adultScope) "H-Vault API Sources" else "API Sources", fontWeight = FontWeight.Bold) },
-                windowInsets = if (embedded) WindowInsets(0, 0, 0, 0) else TopAppBarDefaults.windowInsets,
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-                actions = { TextButton(onClick = { confirmReset = true }) { Text("Reset") } },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface))
+            if (!embedded) {
+                TopAppBar(title = { Text(if (vm.store.adultScope) "H-Vault API Sources" else "API Sources", fontWeight = FontWeight.Bold) },
+                    windowInsets = TopAppBarDefaults.windowInsets,
+                    navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                    actions = { TextButton(onClick = { confirmReset = true }) { Text("Reset") } },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface))
+            }
         }
     ) { pad ->
-        Column(Modifier.padding(pad).verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 104.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 104.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            headerContent?.invoke(this)
+            if (embedded) {
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("H-Vault API Sources", fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { confirmReset = true }) { Text("Reset") }
+                }
+            }
             AniCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
                     SwitchRow("Auto Fallback", "If a source fails, try the next enabled source in priority order.", auto) { vm.setAuto(it) }

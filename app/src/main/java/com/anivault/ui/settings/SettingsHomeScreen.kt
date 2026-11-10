@@ -12,6 +12,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.anivault.ui.common.SettingNavRow
+import com.anivault.ui.common.bottomTabContentPadding
 import com.anivault.ui.theme.dim
 
 private data class Category(val title: String, val subtitle: String, val icon: ImageVector, val route: String)
@@ -31,7 +32,7 @@ fun SettingsHomeScreen(onOpen: (String) -> Unit) {
     Scaffold(containerColor = MaterialTheme.colorScheme.background, contentWindowInsets = WindowInsets(0, 0, 0, 0), topBar = {
         TopAppBar(title = { Text("Settings", fontWeight = FontWeight.Bold) }, colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface))
     }) { pad ->
-        LazyColumn(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp), contentPadding = PaddingValues(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp), contentPadding = PaddingValues(top = 16.dp, bottom = bottomTabContentPadding(28.dp)), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item { Text("PERSONALIZE YOUR VAULT", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
             cats.forEach { c ->
                 item(key = c.route) { SettingNavRow(c.icon, c.title, c.subtitle, { onOpen(c.route) }, highlight = c.route == "api") }

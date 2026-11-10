@@ -250,7 +250,7 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        snackbarHost = { SnackbarHost(snackbar) },
+        snackbarHost = { SnackbarHost(snackbar, Modifier.padding(bottom = bottomTabContentPadding(0.dp))) },
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             if (ui.selecting) {
@@ -361,7 +361,7 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
                         action = "Clear filters", onAction = { viewModel.setQuery { LibraryQuery(sort = it.sort) } }
                     )
                     ui.grid -> LazyVerticalGrid(
-                        GridCells.Adaptive(cellMinWidth), state = gridState, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 104.dp),
+                        GridCells.Adaptive(cellMinWidth), state = gridState, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = bottomTabContentPadding(28.dp)),
                         horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         item(key = "header", span = { GridItemSpan(maxLineSpan) }) { Box(Modifier.layout(fullBleed)) { header() } }
@@ -378,7 +378,7 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
                             )
                         }
                     }
-                    else -> LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 104.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    else -> LazyColumn(state = listState, contentPadding = PaddingValues(bottom = bottomTabContentPadding(28.dp)), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         item(key = "header") { header() }
                         items(rows, key = { it.key }) { g ->
                             val e = g.representative

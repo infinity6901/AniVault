@@ -143,6 +143,30 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
     var vaultCustomMirrors: String
         get() = sp.getString(K_VAULT_MIRRORS, "") ?: ""
         set(v) = putString(K_VAULT_MIRRORS, v)
+    /** H-Vault library layout: "grid" | "list" (defaults to libraryView when unset). */
+    var vaultView: String
+        get() = sp.getString(K_VAULT_VIEW, null) ?: libraryView
+        set(v) = putString(K_VAULT_VIEW, v)
+    /** H-Vault library sort order ("UPDATED" | "TITLE" | "RATING" | "PROGRESS"). */
+    var vaultSort: String
+        get() = sp.getString(K_VAULT_SORT, "UPDATED") ?: "UPDATED"
+        set(v) = putString(K_VAULT_SORT, v)
+    /** H-Vault status tab filter ("ALL" or WatchStatus.name). */
+    var vaultStatusFilter: String
+        get() = sp.getString(K_VAULT_STATUS, "ALL") ?: "ALL"
+        set(v) = putString(K_VAULT_STATUS, v)
+    /** H-Vault series grouping toggle. */
+    var vaultGrouped: Boolean
+        get() = sp.getBoolean(K_VAULT_GROUPED, false)
+        set(v) = putBool(K_VAULT_GROUPED, v)
+    /** H-Vault uncensored-only filter toggle. */
+    var vaultUncensoredOnly: Boolean
+        get() = sp.getBoolean(K_VAULT_UNCENSORED_ONLY, false)
+        set(v) = putBool(K_VAULT_UNCENSORED_ONLY, v)
+    /** H-Vault stats summary banner visibility. */
+    var vaultShowStats: Boolean
+        get() = sp.getBoolean(K_VAULT_SHOW_STATS, true)
+        set(v) = putBool(K_VAULT_SHOW_STATS, v)
 
     // ── Network / providers ────────────────────────────────────────────────
     var networkTimeoutSec: Int
@@ -226,6 +250,12 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         const val K_VAULT_SCRAPER_PRIORITY = "vault_scraper_priority"
         const val K_VAULT_AUTO_UNCENSOR = "vault_auto_uncensor_covers"
         const val K_VAULT_MIRRORS = "vault_custom_mirrors"
+        const val K_VAULT_VIEW = "vault_view"
+        const val K_VAULT_SORT = "vault_sort"
+        const val K_VAULT_STATUS = "vault_status_filter"
+        const val K_VAULT_GROUPED = "vault_grouped"
+        const val K_VAULT_UNCENSORED_ONLY = "vault_uncensored_only"
+        const val K_VAULT_SHOW_STATS = "vault_show_stats"
         const val K_NET_TIMEOUT = "net_timeout_s"
         const val K_NET_RETRIES = "net_retries"
         const val K_FALLBACK_EMPTY = "fallback_on_empty"
@@ -245,14 +275,14 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
             K_GLASS_TINT, K_GLASS_OPACITY, K_GLASS_SPECULAR, K_GLASS_BLUR, K_GLASS_ANIMATED, K_GLASS_FLOATING_NAV,
             K_WIDGET_GLASS, K_WIDGET_GLASS_OPACITY, K_WIDGET_GLASS_COVER,
             K_CONFIRM_DELETE, K_DEFAULT_STATUS, K_AUTO_COMPLETE, K_PLUS_ONE,
-            K_SYNOPSIS, K_LIB_VIEW, K_LIB_SORT, K_GRID_DENSITY, K_POSTER_BADGE, K_SWIPE_GESTURES, K_SMART_LISTS, K_VAULT_SCRAPER_PRIORITY, K_VAULT_AUTO_UNCENSOR, K_VAULT_MIRRORS,
+            K_SYNOPSIS, K_LIB_VIEW, K_LIB_SORT, K_GRID_DENSITY, K_POSTER_BADGE, K_SWIPE_GESTURES, K_SMART_LISTS, K_VAULT_SCRAPER_PRIORITY, K_VAULT_AUTO_UNCENSOR, K_VAULT_MIRRORS, K_VAULT_VIEW, K_VAULT_SORT, K_VAULT_STATUS, K_VAULT_GROUPED, K_VAULT_UNCENSORED_ONLY, K_VAULT_SHOW_STATS,
             K_NET_TIMEOUT, K_NET_RETRIES, K_FALLBACK_EMPTY,
             K_CONFLICT, K_DELETE_REMOTE, K_MARK_VAULT, K_QUIET_START, K_QUIET_END
         )
 
         val BOOL_KEYS = setOf(
             K_DYNAMIC, K_GLASS_ANIMATED, K_GLASS_FLOATING_NAV, K_WIDGET_GLASS, K_WIDGET_GLASS_COVER,
-            K_CONFIRM_DELETE, K_SWIPE_GESTURES, K_AUTO_COMPLETE, K_PLUS_ONE, K_SYNOPSIS, K_VAULT_AUTOLOCK, K_VAULT_SCRAPER_PRIORITY, K_VAULT_AUTO_UNCENSOR,
+            K_CONFIRM_DELETE, K_SWIPE_GESTURES, K_AUTO_COMPLETE, K_PLUS_ONE, K_SYNOPSIS, K_VAULT_AUTOLOCK, K_VAULT_SCRAPER_PRIORITY, K_VAULT_AUTO_UNCENSOR, K_VAULT_GROUPED, K_VAULT_UNCENSORED_ONLY, K_VAULT_SHOW_STATS,
             K_FALLBACK_EMPTY, K_DELETE_REMOTE, K_MARK_VAULT, K_NOTIF, K_NOTIF_REMINDERS, K_NOTIF_AIRING, K_NOTIF_SYNC
         )
 

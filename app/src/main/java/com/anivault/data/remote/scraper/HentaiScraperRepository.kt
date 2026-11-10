@@ -6,6 +6,7 @@ import com.anivault.data.local.model.WatchStatus
 import com.anivault.data.remote.cloudflare.CloudflareBypassException
 import com.anivault.data.remote.cloudflare.CloudflareInterceptor
 import com.anivault.data.remote.model.ScrapedEntry
+import com.anivault.data.remote.model.VaultEpisodePreview
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -19,15 +20,23 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.io.IOException
 import java.net.URLEncoder
+import java.util.Calendar
+import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Named
 import javax.inject.Singleton
 
 /**
  * Pure, JVM-testable parser for the Aniyomi `Hanime` extension JSON protocol (`search.htv-services.com`
- * and `hanime.tv/api/v8/video`), plus multi-generation HTML/OpenGraph fallback.
+ * and `hanime.tv/api/v8/video`), including 16:9 episode preview thumbnails, synopsis, community rating,
+ * and multi-generation HTML/OpenGraph fallback.
  */
 object HanimeAniyomiCodec {
+
+    private val EP_NUM_REGEX = Regex("""(?:episode|ep|\b)\s*(\d{1,3})\s*$""", RegexOption.IGNORE_CASE)
+
+    fun extractEpisodeNumber(title: String, fallbackIndex: Int): Int =
+        EP_NUM_REGEX.find(title.trim())?.groupValues?.getOrNull(1)?.toIntOrNull() ?: fallbackIndex
 
     fun buildSearchPayload(query: String, page: Int): String =
         JSONObject()
@@ -59,10 +68,23 @@ object HanimeAniyomiCodec {
             if (slug.isBlank()) continue
             val name = obj.optString("name").trim()
             if (name.isEmpty()) continue
-            val cover = obj.optString("cover_url").trim()
-                .ifBlank { obj.optString("poster_url").trim() }
+            val posterUrl = obj.optString("poster_url").trim()
+            val cover = obj.optString("cover_url").trim().ifBlank { posterUrl }
+            val preview = posterUrl.ifBlank { cover }
             val brand = obj.optString("brand").trim().ifBlank { null }
             val isCensored = obj.optBoolean("is_censored", false)
+            val rawDesc = obj.optString("description").trim()
+            val synopsis = if (rawDesc.isNotEmpty()) Jsoup.parse(rawDesc).text().trim() else ""
+            val likes = obj.optLong("likes", 0L)
+            val dislikes = obj.optLong("dislikes", 0L)
+            val score = if (likes + dislikes > 0L) (10f * likes.toFloat() / (likes + dislikes).toFloat()) else 0f
+            val releasedUnix = obj.optLong("released_at_unix", obj.optLong("created_at_unix", 0L))
+            val releaseYear = if (releasedUnix > 0L) {
+                val cal = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+                cal.timeInMillis = releasedUnix * 1000L
+                cal.get(Calendar.YEAR)
+            } else null
+
             val tags = ArrayList<String>()
             val tagsArr = obj.optJSONArray("tags")
             if (tagsArr != null) {
@@ -73,6 +95,22 @@ object HanimeAniyomiCodec {
             }
             val durationMs = obj.optLong("duration_in_ms", 0L)
             val durationMin = if (durationMs > 0L) (durationMs / 60_000L).toInt().coerceAtLeast(1) else 24
+            val epNum = extractEpisodeNumber(name, i + 1)
+            val detailUrl = "https://hanime.tv/videos/hentai/$slug"
+            val epPreview = if (preview.isNotEmpty()) {
+                listOf(
+                    VaultEpisodePreview(
+                        episodeNumber = epNum,
+                        title = name,
+                        previewImageUrl = preview,
+                        durationMinutes = durationMin,
+                        releaseDate = releaseYear?.toString().orEmpty(),
+                        detailUrl = detailUrl,
+                        sourceName = "hanime.tv"
+                    )
+                )
+            } else emptyList()
+
             out += ScrapedEntry(
                 id = "hanime:$slug",
                 title = name,
@@ -82,7 +120,13 @@ object HanimeAniyomiCodec {
                 isCensored = isCensored,
                 episodeCount = 1,
                 durationMinutes = durationMin,
-                detailUrl = "https://hanime.tv/videos/hentai/$slug"
+                detailUrl = detailUrl,
+                sourceName = "hanime.tv",
+                synopsis = synopsis,
+                previewUrl = preview,
+                releaseYear = releaseYear,
+                ratingScore = score,
+                episodePreviews = epPreview
             )
         }
         return out
@@ -97,10 +141,18 @@ object HanimeAniyomiCodec {
             fallbackDetailUrl.trimEnd('/').substringAfterLast("/")
         }
         val title = video.optString("name").trim().ifBlank { return null }
-        val cover = video.optString("cover_url").trim()
-            .ifBlank { video.optString("poster_url").trim() }
+        val posterUrl = video.optString("poster_url").trim()
+        val cover = video.optString("cover_url").trim().ifBlank { posterUrl }
         val studio = video.optString("brand").trim().ifBlank { null }
         val isCensored = video.optBoolean("is_censored", false)
+        val rawDesc = video.optString("description").trim()
+        val synopsis = if (rawDesc.isNotEmpty()) Jsoup.parse(rawDesc).text().trim() else ""
+        val likes = video.optLong("likes", 0L)
+        val dislikes = video.optLong("dislikes", 0L)
+        val score = if (likes + dislikes > 0L) (10f * likes.toFloat() / (likes + dislikes).toFloat()) else 0f
+        val releasedAt = video.optString("released_at").trim().take(10)
+        val releaseYear = releasedAt.take(4).toIntOrNull()
+
         val tags = ArrayList<String>()
         val tagsArr = video.optJSONArray("hentai_tags")
         if (tagsArr != null) {
@@ -110,9 +162,46 @@ object HanimeAniyomiCodec {
                 if (tText.isNotEmpty()) tags += tText
             }
         }
-        val franchiseEps = root.optJSONArray("hentai_franchise_hentai_videos")?.length() ?: 1
         val durationMs = video.optLong("duration_in_ms", 0L)
         val durationMin = if (durationMs > 0L) (durationMs / 60_000L).toInt().coerceAtLeast(1) else 24
+
+        val previews = ArrayList<VaultEpisodePreview>()
+        val franchiseArr = root.optJSONArray("hentai_franchise_hentai_videos")
+        if (franchiseArr != null && franchiseArr.length() > 0) {
+            for (i in 0 until franchiseArr.length()) {
+                val epObj = franchiseArr.optJSONObject(i) ?: continue
+                val epSlug = epObj.optString("slug").trim()
+                val epName = epObj.optString("name").trim().ifBlank { "Episode ${i + 1}" }
+                val epPoster = epObj.optString("poster_url").trim()
+                    .ifBlank { epObj.optString("cover_url").trim() }
+                if (epPoster.isEmpty()) continue
+                val epDurMs = epObj.optLong("duration_in_ms", 0L)
+                val epDurMin = if (epDurMs > 0L) (epDurMs / 60_000L).toInt().coerceAtLeast(1) else durationMin
+                val epDate = epObj.optString("released_at").trim().take(10)
+                val epNum = extractEpisodeNumber(epName, i + 1)
+                previews += VaultEpisodePreview(
+                    episodeNumber = epNum,
+                    title = epName,
+                    previewImageUrl = epPoster,
+                    durationMinutes = epDurMin,
+                    releaseDate = epDate,
+                    detailUrl = if (epSlug.isNotEmpty()) "https://hanime.tv/videos/hentai/$epSlug" else fallbackDetailUrl,
+                    sourceName = "hanime.tv"
+                )
+            }
+        } else if (posterUrl.isNotEmpty() || cover.isNotEmpty()) {
+            previews += VaultEpisodePreview(
+                episodeNumber = extractEpisodeNumber(title, 1),
+                title = title,
+                previewImageUrl = posterUrl.ifBlank { cover },
+                durationMinutes = durationMin,
+                releaseDate = releasedAt,
+                detailUrl = "https://hanime.tv/videos/hentai/$slug",
+                sourceName = "hanime.tv"
+            )
+        }
+
+        val franchiseEps = (franchiseArr?.length() ?: 1).coerceAtLeast(previews.size.coerceAtLeast(1))
 
         return ScrapedEntry(
             id = "hanime:$slug",
@@ -121,15 +210,21 @@ object HanimeAniyomiCodec {
             tags = tags,
             studio = studio,
             isCensored = isCensored,
-            episodeCount = franchiseEps.coerceAtLeast(1),
+            episodeCount = franchiseEps,
             durationMinutes = durationMin,
-            detailUrl = "https://hanime.tv/videos/hentai/$slug"
+            detailUrl = "https://hanime.tv/videos/hentai/$slug",
+            sourceName = "hanime.tv",
+            synopsis = synopsis,
+            previewUrl = posterUrl.ifBlank { cover },
+            releaseYear = releaseYear,
+            ratingScore = score,
+            episodePreviews = previews
         )
     }
 }
 
 /**
- * Primary H-Vault source for uncensored covers and metadata (`hanime.tv`).
+ * Primary H-Vault source for uncensored covers, episode previews, and metadata (`hanime.tv`).
  */
 @Singleton
 class HentaiScraperRepository @Inject constructor(
@@ -139,7 +234,7 @@ class HentaiScraperRepository @Inject constructor(
     private val hVaultDao: HVaultDao
 ) : HentaiSource {
 
-    override val sourceName: String = "hanime.tv (Aniyomi API)"
+    override val sourceName: String = "hanime.tv"
 
     companion object {
         const val BASE_URL = "https://hanime.tv"
@@ -286,7 +381,9 @@ class HentaiScraperRepository @Inject constructor(
                     isCensored = false,
                     episodeCount = epCount,
                     durationMinutes = 24,
-                    detailUrl = detailUrl
+                    detailUrl = detailUrl,
+                    sourceName = "hanime.tv",
+                    previewUrl = coverUrl
                 )
             }.getOrNull()
         }.distinctBy { it.id }
@@ -303,6 +400,9 @@ class HentaiScraperRepository @Inject constructor(
         val cover = imgEl?.attr("data-src")?.ifBlank { null }
             ?: imgEl?.attr("src")?.ifBlank { null }
             ?: ogImage.orEmpty()
+        val synopsis = doc.selectFirst("div.hvp-description, meta[property=og:description], meta[name=description]")
+            ?.let { it.attr("content").ifBlank { it.text() } }
+            ?.trim().orEmpty()
         val studio = doc.selectFirst("div.hvpi-studio a")?.text()?.trim()?.ifBlank { null }
         val tags = doc.select("div.hvpi-tags span.tag").map { it.text().trim() }.filter { it.isNotBlank() }
         val isCens = doc.selectFirst("div.hvpi-censored") != null
@@ -315,7 +415,10 @@ class HentaiScraperRepository @Inject constructor(
             isCensored = isCens,
             episodeCount = 1,
             durationMinutes = 24,
-            detailUrl = detailUrl
+            detailUrl = detailUrl,
+            sourceName = "hanime.tv",
+            synopsis = synopsis,
+            previewUrl = ogImage ?: cover
         )
     }
 

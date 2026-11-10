@@ -14,6 +14,7 @@ import com.anivault.data.provider.AiringFormat
 import com.anivault.data.provider.RedirectOriginGuard
 import com.anivault.data.remote.model.ScrapedEntry
 import com.anivault.data.remote.scraper.AniyomiAdaptiveParser
+import com.anivault.data.remote.scraper.CustomMirrorUrls
 import com.anivault.data.remote.scraper.HanimeAniyomiCodec
 import com.anivault.data.remote.scraper.UncensoredCoverMatcher
 import com.anivault.data.sync.OAuthSecurity
@@ -234,7 +235,7 @@ class NewFeatureTests {
     @Test fun malPkceUsesS256AndNeverLeaksVerifierInUrl() {
         // RFC 7636 Appendix B test vector
         val verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
-        val expectedChallenge = "E9Melhoa2OwvFrKbTJguCHaoeK1t8URWbuGJSstw-cM"
+        val expectedChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
         assertEquals(expectedChallenge, OAuthSecurity.pkceS256Challenge(verifier))
 
         val url = OAuthSecurity.buildMalAuthUrl("client123", verifier, "state999", "anivault://auth/mal")
@@ -356,5 +357,108 @@ class NewFeatureTests {
         val match = UncensoredCoverMatcher.bestMatch("Overflow", emptyList(), candidates)
         assertNotNull(match)
         assertEquals("https://static-assets.highwinds-cdn.com/posters/overflow.jpg", match?.coverUrl)
+    }
+
+    @Test fun customMirrorUrlsValidateNormalizeAndDisplaySource() {
+        assertEquals(
+            "https://watchhentai.org",
+            CustomMirrorUrls.normalizeAndValidate("  watchhentai.org/ ").getOrNull()
+        )
+        assertEquals(
+            "https://hentaihaven.xxx/sub",
+            CustomMirrorUrls.normalizeAndValidate("https://HentaiHaven.xxx/sub/").getOrNull()
+        )
+        assertTrue(CustomMirrorUrls.normalizeAndValidate("http://watchhentai.org").isFailure)
+        assertTrue(CustomMirrorUrls.normalizeAndValidate("https://127.0.0.1").isFailure)
+        assertTrue(CustomMirrorUrls.normalizeAndValidate("https://192.168.1.10").isFailure)
+
+        val list = CustomMirrorUrls.parseList("https://watchhentai.org/, https://hentaihaven.xxx")
+        assertEquals(listOf("https://watchhentai.org", "https://hentaihaven.xxx"), list)
+        assertEquals("https://watchhentai.org,https://hentaihaven.xxx", CustomMirrorUrls.encodeList(list))
+
+        val entry = ScrapedEntry(
+            id = "watchhentai:test",
+            title = "Test",
+            coverUrl = "https://hentaihaven.xxx/a.jpg",
+            tags = emptyList(),
+            studio = null,
+            isCensored = false,
+            episodeCount = 1,
+            durationMinutes = 20,
+            detailUrl = "https://www.hentaihaven.xxx/videos/test/"
+        )
+        assertEquals("hentaihaven.xxx", entry.displaySource)
+    }
+
+    @Test fun scraperDetailExtractsEpisodePreviewsAndSynopsis() {
+        val hanimeDetailJson = """
+            {
+              "hentai_video": {
+                "slug": "overflow-1",
+                "name": "Overflow Episode 1",
+                "cover_url": "https://static-assets.highwinds-cdn.com/covers/overflow.jpg",
+                "poster_url": "https://static-assets.highwinds-cdn.com/posters/overflow-ep1.jpg",
+                "brand": "Studio Hokiboshi",
+                "is_censored": false,
+                "description": "<p>Two sisters and a bath.</p>",
+                "likes": 900,
+                "dislikes": 100,
+                "released_at": "2020-01-05",
+                "duration_in_ms": 480000,
+                "hentai_tags": [{"text": "Romance"}, {"text": "Uncensored"}]
+              },
+              "hentai_franchise_hentai_videos": [
+                {
+                  "slug": "overflow-1",
+                  "name": "Overflow Episode 1",
+                  "poster_url": "https://static-assets.highwinds-cdn.com/posters/overflow-ep1.jpg",
+                  "duration_in_ms": 480000,
+                  "released_at": "2020-01-05"
+                },
+                {
+                  "slug": "overflow-2",
+                  "name": "Overflow Episode 2",
+                  "poster_url": "https://static-assets.highwinds-cdn.com/posters/overflow-ep2.jpg",
+                  "duration_in_ms": 480000,
+                  "released_at": "2020-01-12"
+                }
+              ]
+            }
+        """.trimIndent()
+        val detail = HanimeAniyomiCodec.parseDetailJson(hanimeDetailJson, "https://hanime.tv/videos/hentai/overflow-1")
+        assertNotNull(detail)
+        assertEquals("Two sisters and a bath.", detail?.synopsis)
+        assertEquals(2020, detail?.releaseYear)
+        assertEquals(9.0f, detail?.ratingScore ?: 0f, 0.01f)
+        assertEquals(2, detail?.episodePreviews?.size)
+        assertEquals(1, detail?.episodePreviews?.get(0)?.episodeNumber)
+        assertEquals("https://static-assets.highwinds-cdn.com/posters/overflow-ep1.jpg", detail?.episodePreviews?.get(0)?.previewImageUrl)
+        assertEquals(2, detail?.episodePreviews?.get(1)?.episodeNumber)
+        assertEquals("https://static-assets.highwinds-cdn.com/posters/overflow-ep2.jpg", detail?.episodePreviews?.get(1)?.previewImageUrl)
+
+        val watchHentaiDetailHtml = """
+            <html><body>
+              <h1 class="entry-title">Succubus Stayed Life</h1>
+              <div class="poster"><img src="https://watchhentai.net/wp-content/uploads/cover-185x278.jpg"/></div>
+              <div class="wp-content"><p>A detailed fantasy OVA synopsis that is more than twenty characters long.</p></div>
+              <ul class="episodios">
+                <li>
+                  <div class="imagen"><img data-src="https://watchhentai.net/wp-content/uploads/ep1-300x169.jpg"/></div>
+                  <div class="numerando">1 - 1</div>
+                  <div class="episodiotitle"><a href="https://watchhentai.net/videos/succubus-ep-1/">Episode 1</a><span class="date">2024-03-01</span></div>
+                </li>
+                <li>
+                  <div class="imagen"><img data-src="https://watchhentai.net/wp-content/uploads/ep2-300x169.jpg"/></div>
+                  <div class="numerando">1 - 2</div>
+                  <div class="episodiotitle"><a href="https://watchhentai.net/videos/succubus-ep-2/">Episode 2</a><span class="date">2024-04-01</span></div>
+                </li>
+              </ul>
+            </body></html>
+        """.trimIndent()
+        val whDetail = AniyomiAdaptiveParser.parseAdaptiveDetailHtml(watchHentaiDetailHtml, "https://watchhentai.net/series/succubus-stayed-life/")
+        assertEquals("A detailed fantasy OVA synopsis that is more than twenty characters long.", whDetail.synopsis)
+        assertEquals(2, whDetail.episodePreviews.size)
+        assertEquals("https://watchhentai.net/wp-content/uploads/ep1.jpg", whDetail.episodePreviews[0].previewImageUrl)
+        assertEquals("watchhentai.net", whDetail.episodePreviews[0].sourceName)
     }
 }

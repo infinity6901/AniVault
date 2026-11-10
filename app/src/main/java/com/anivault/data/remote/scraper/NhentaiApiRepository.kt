@@ -1,6 +1,7 @@
 package com.anivault.data.remote.scraper
 
 import com.anivault.data.remote.model.ScrapedEntry
+import com.anivault.data.remote.model.VaultEpisodePreview
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -127,6 +128,26 @@ class NhentaiApiRepository @Inject constructor(
         val numPages     = obj.optInt("num_pages", 1)
         val detailUrl    = knownDetailUrl ?: "$BASE_URL/g/$rawId/"
 
+        val previews = mutableListOf<VaultEpisodePreview>()
+        val pagesArr = images?.optJSONArray("pages")
+        if (mediaId.isNotEmpty() && pagesArr != null) {
+            val count = minOf(pagesArr.length(), 12)
+            for (p in 0 until count) {
+                val pObj = pagesArr.optJSONObject(p)
+                val pExt = extFromType(pObj?.optString("t") ?: "j")
+                val thumbUrl = "https://t.nhentai.net/galleries/$mediaId/${p + 1}t.$pExt"
+                previews += VaultEpisodePreview(
+                    episodeNumber = p + 1,
+                    title = "Page ${p + 1}",
+                    previewImageUrl = thumbUrl,
+                    durationMinutes = 0,
+                    releaseDate = "",
+                    detailUrl = "$detailUrl${p + 1}/",
+                    sourceName = "nhentai.net"
+                )
+            }
+        }
+
         return ScrapedEntry(
             id              = id,
             title           = title,
@@ -136,7 +157,10 @@ class NhentaiApiRepository @Inject constructor(
             isCensored      = false,
             episodeCount    = 1,           // nhentai is per-volume, not episodic
             durationMinutes = numPages,    // store page count as proxy
-            detailUrl       = detailUrl
+            detailUrl       = detailUrl,
+            sourceName      = "nhentai.net",
+            previewUrl      = previews.firstOrNull()?.previewImageUrl ?: coverUrl,
+            episodePreviews = previews
         )
     }
 

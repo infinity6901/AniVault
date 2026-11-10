@@ -6,9 +6,12 @@ import android.app.Activity
 import android.view.WindowManager
 import androidx.biometric.BiometricManager.Authenticators
 import androidx.biometric.BiometricPrompt
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -31,12 +34,17 @@ import androidx.lifecycle.viewModelScope
 import com.anivault.core.AppPrefs
 import com.anivault.core.Sanitizer
 import com.anivault.core.VaultSession
+import com.anivault.data.library.LibrarySort
 import com.anivault.data.local.entity.HVaultEntry
 import com.anivault.data.local.model.WatchStatus
 import com.anivault.data.remote.model.ScrapedEntry
+import com.anivault.data.remote.model.VaultRichDetails
+import com.anivault.data.remote.scraper.CustomMirrorUrls
 import com.anivault.data.remote.scraper.HentaiFallbackRepository
+import com.anivault.data.remote.scraper.MirrorTestResult
 import com.anivault.data.remote.scraper.UncensoredCoverMatcher
 import com.anivault.ui.common.*
+import com.anivault.ui.theme.AniVaultColors
 import com.anivault.ui.theme.AniVaultTheme
 import com.anivault.ui.theme.AppMode
 import com.anivault.ui.theme.dim
@@ -69,6 +77,57 @@ class VaultViewModel @Inject constructor(
     fun say(msg: String) { _message.value = msg }
     fun clearMessage() { _message.value = null }
 
+    // ── Persistent H-Vault UI & Filter State (survives tab switches & app restarts) ──
+    private val _selectedTab = MutableStateFlow(0)
+    val selectedTab: StateFlow<Int> = _selectedTab.asStateFlow()
+    fun setTab(tab: Int) { _selectedTab.value = tab }
+
+    private val _searchQueryText = MutableStateFlow("")
+    val searchQueryText: StateFlow<String> = _searchQueryText.asStateFlow()
+    fun setSearchQueryText(q: String) { _searchQueryText.value = q }
+
+    private val _vaultQuery = MutableStateFlow(
+        VaultQuery(
+            status = prefs.vaultStatusFilter.takeIf { it.isNotBlank() && it != "ALL" }?.let { WatchStatus.parse(it) },
+            uncensoredOnly = prefs.vaultUncensoredOnly,
+            sort = LibrarySort.parse(prefs.vaultSort)
+        )
+    )
+    val vaultQuery: StateFlow<VaultQuery> = _vaultQuery.asStateFlow()
+
+    private val _vaultGrid = MutableStateFlow(prefs.vaultView == "grid")
+    val vaultGrid: StateFlow<Boolean> = _vaultGrid.asStateFlow()
+
+    private val _vaultGrouped = MutableStateFlow(prefs.vaultGrouped)
+    val vaultGrouped: StateFlow<Boolean> = _vaultGrouped.asStateFlow()
+
+    private val _vaultShowStats = MutableStateFlow(prefs.vaultShowStats)
+    val vaultShowStats: StateFlow<Boolean> = _vaultShowStats.asStateFlow()
+
+    fun updateVaultQuery(transform: (VaultQuery) -> VaultQuery) {
+        val next = transform(_vaultQuery.value)
+        _vaultQuery.value = next
+        prefs.vaultSort = next.sort.name
+        prefs.vaultStatusFilter = next.status?.name ?: "ALL"
+        prefs.vaultUncensoredOnly = next.uncensoredOnly
+    }
+
+    fun toggleVaultGrid() {
+        val next = !_vaultGrid.value
+        _vaultGrid.value = next
+        prefs.vaultView = if (next) "grid" else "list"
+    }
+
+    fun setVaultGrouped(grouped: Boolean) {
+        _vaultGrouped.value = grouped
+        prefs.vaultGrouped = grouped
+    }
+
+    fun setVaultShowStats(show: Boolean) {
+        _vaultShowStats.value = show
+        prefs.vaultShowStats = show
+    }
+
     /** Two-way sync of linked H-Vault entries with the connected accounts (the screen is already behind the unlock). */
     fun syncWithAccounts() {
         viewModelScope.launch {
@@ -99,11 +158,35 @@ class VaultViewModel @Inject constructor(
         }
     }
 
+    private val richDetailsCache = HashMap<String, VaultRichDetails>()
+
+    /** Loads rich metadata, characters, relations, synopsis, and scraper episode previews for [entry]. */
+    fun loadRichDetails(entry: HVaultEntry, forceRefresh: Boolean = false, onDone: (VaultRichDetails) -> Unit) {
+        if (!forceRefresh) {
+            richDetailsCache[entry.id]?.let { onDone(it); return }
+        }
+        viewModelScope.launch {
+            val details = runCatching { repo.fetchRichDetails(entry) }.getOrDefault(VaultRichDetails())
+            richDetailsCache[entry.id] = details
+            onDone(details)
+        }
+    }
+
     /** Queries all uncensored scrapers for candidate cover art matching [title]. */
     fun findUncensoredCandidates(title: String, onDone: (List<ScrapedEntry>) -> Unit) {
         viewModelScope.launch {
             val list = runCatching { repo.fetchUncensoredCandidates(title) }.getOrDefault(emptyList())
             onDone(list)
+        }
+    }
+
+    /** Tests whether the Aniyomi multi-engine scraper works on a custom mirror URL. */
+    fun testCustomMirror(url: String, onDone: (MirrorTestResult) -> Unit) {
+        viewModelScope.launch {
+            val res = runCatching { repo.testCustomMirror(url) }.getOrElse {
+                MirrorTestResult(false, Sanitizer.clean(it.message, 80).ifBlank { "Test failed" })
+            }
+            onDone(res)
         }
     }
 
@@ -192,12 +275,15 @@ fun VaultScreen(onBack: () -> Unit, vm: VaultViewModel = hiltViewModel()) {
 private fun VaultContent(onBack: () -> Unit, vm: VaultViewModel) {
     val entries by vm.entries.collectAsStateWithLifecycle()
     val search by vm.search.collectAsStateWithLifecycle()
-    var tab by remember { mutableIntStateOf(0) }
-    var query by remember { mutableStateOf("") }
+    val tab by vm.selectedTab.collectAsStateWithLifecycle()
+    val query by vm.searchQueryText.collectAsStateWithLifecycle()
     val syncing by vm.syncing.collectAsStateWithLifecycle()
     val uncensoring by vm.uncensoring.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    val gridState = rememberLazyGridState()
+    val listState = rememberLazyListState()
+
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.clearMessage() } }
     Scaffold(containerColor = MaterialTheme.colorScheme.background, snackbarHost = { SnackbarHost(snackbar) }, topBar = {
         TopAppBar(title = { Text("H-Vault", fontWeight = FontWeight.Bold) },
@@ -217,22 +303,26 @@ private fun VaultContent(onBack: () -> Unit, vm: VaultViewModel) {
     }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             TabRow(tab, containerColor = MaterialTheme.colorScheme.surface) {
-                Tab(tab == 0, { tab = 0 }, text = { Text("My vault (${entries.size})") })
-                Tab(tab == 1, { tab = 1 }, text = { Text("Search") })
-                Tab(tab == 2, { tab = 2 }, text = { Text("Sources") })
+                Tab(tab == 0, { vm.setTab(0) }, text = { Text("My vault (${entries.size})") })
+                Tab(tab == 1, { vm.setTab(1) }, text = { Text("Search") })
+                Tab(tab == 2, { vm.setTab(2) }, text = { Text("Sources") })
             }
             if (tab == 2) {
-                Column(Modifier.fillMaxSize()) {
-                    UncensoredScraperSettingsCard(vm, entries)
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
-                        com.anivault.ui.settings.ApiSourcesScreen(onBack = { tab = 1 }, embedded = true, vm = hiltViewModel<com.anivault.ui.settings.VaultApiSourcesViewModel>())
-                    }
+                Box(Modifier.fillMaxSize()) {
+                    com.anivault.ui.settings.ApiSourcesScreen(
+                        onBack = { vm.setTab(0) },
+                        embedded = true,
+                        vm = hiltViewModel<com.anivault.ui.settings.VaultApiSourcesViewModel>(),
+                        headerContent = {
+                            UncensoredScraperSettingsCard(vm, entries)
+                        }
+                    )
                 }
             } else if (tab == 0) {
-                VaultLibraryTab(entries, vm)
+                VaultLibraryTab(entries, vm, gridState = gridState, listState = listState)
             } else {
                 OutlinedTextField(
-                    query, { query = it }, singleLine = true, placeholder = { Text("Search H-Vault sources") },
+                    query, { vm.setSearchQueryText(it) }, singleLine = true, placeholder = { Text("Search H-Vault sources") },
                     leadingIcon = { Icon(Icons.Default.Search, null) },
                     trailingIcon = {
                         if (query.isNotBlank()) IconButton(onClick = { vm.runSearch(query) }) { Icon(Icons.Default.ArrowForward, "Run search") }
@@ -257,6 +347,7 @@ private fun VaultContent(onBack: () -> Unit, vm: VaultViewModel) {
                                         Text(r.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
                                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                                             if (r.episodeCount > 0) Text("${r.episodeCount} eps", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
+                                            Tag(r.displaySource, MaterialTheme.colorScheme.primary)
                                             if (!r.isCensored && !UncensoredCoverMatcher.isCensoredCatalogCover(r.coverUrl)) {
                                                 Tag("Uncensored Cover", MaterialTheme.colorScheme.primary)
                                             }
@@ -278,22 +369,36 @@ private fun VaultContent(onBack: () -> Unit, vm: VaultViewModel) {
 private fun UncensoredScraperSettingsCard(vm: VaultViewModel, entries: List<HVaultEntry>) {
     var scraperPriority by remember { mutableStateOf(vm.prefs.vaultScraperPriority) }
     var autoUncensor by remember { mutableStateOf(vm.prefs.vaultAutoUncensorCovers) }
-    var customMirrors by remember { mutableStateOf(vm.prefs.vaultCustomMirrors) }
+    var mirrorList by remember { mutableStateOf(CustomMirrorUrls.parseList(vm.prefs.vaultCustomMirrors)) }
+    var draftUrl by remember { mutableStateOf("") }
+    var editingIndex by remember { mutableStateOf<Int?>(null) }
+    var inputError by remember { mutableStateOf<String?>(null) }
+    var testingUrls by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var testResults by remember { mutableStateOf<Map<String, MirrorTestResult>>(emptyMap()) }
     var expanded by remember { mutableStateOf(false) }
+
     val uncensoring by vm.uncensoring.collectAsStateWithLifecycle()
     val censoredCount = remember(entries) { entries.count { UncensoredCoverMatcher.isCensoredCatalogCover(it.imageUrl) } }
 
-    AniCard(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    fun persistMirrors(updated: List<String>) {
+        mirrorList = updated
+        vm.prefs.vaultCustomMirrors = CustomMirrorUrls.encodeList(updated)
+    }
+
+    AniCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.AutoFixHigh, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("Uncensored Cover Scrapers (Aniyomi Engine)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Uncensored Cover Scrapers", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Text(
-                        "Prioritizes Hanime API & WP-JSON/DooPlay/Madara scrapers over censored AniList/MAL covers.",
+                        if (scraperPriority) "Priority #1 · Hanime, WatchHentai, HentaiHaven & nhentai"
+                        else "Catalog priority · Auto-uncensor ${if (autoUncensor) "enabled" else "disabled"}",
                         fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.dim
+                        color = MaterialTheme.colorScheme.dim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 TextButton(onClick = { expanded = !expanded }) {
@@ -318,6 +423,7 @@ private fun UncensoredScraperSettingsCard(vm: VaultViewModel, entries: List<HVau
                 }
             }
             if (expanded) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                 SwitchRow(
                     title = "Prioritize Uncensored Scrapers",
                     subtitle = "Query Hanime, WatchHentai, HentaiHaven & nhentai before AniList/MAL/Kitsu.",
@@ -334,20 +440,155 @@ private fun UncensoredScraperSettingsCard(vm: VaultViewModel, entries: List<HVau
                     autoUncensor = it
                     vm.prefs.vaultAutoUncensorCovers = it
                 }
-                OutlinedTextField(
-                    value = customMirrors,
-                    onValueChange = {
-                        customMirrors = it
-                        vm.prefs.vaultCustomMirrors = it.trim()
-                    },
-                    label = { Text("Custom Mirror URLs (comma-separated https://)") },
-                    placeholder = { Text("https://watchhentai.org, https://hentaihaven.xxx") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    supportingText = {
-                        Text("If a scraper site changes its domain, add the new mirror here — the Aniyomi WP-JSON & multi-theme parser adapts automatically.")
-                    }
+
+                Text("Custom Mirror URLs", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text(
+                    "Add custom domain mirrors if a scraper site changes its domain. The Aniyomi WP-JSON, DooPlay & multi-theme parser adapts automatically.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.dim
                 )
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = draftUrl,
+                        onValueChange = { draftUrl = it; inputError = null },
+                        label = { Text(if (editingIndex != null) "Edit mirror URL" else "Mirror URL (https://)") },
+                        placeholder = { Text("https://watchhentai.org") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (editingIndex != null) {
+                        IconButton(
+                            onClick = { editingIndex = null; draftUrl = ""; inputError = null },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(Icons.Default.Close, "Cancel edit")
+                        }
+                    }
+                    Button(
+                        enabled = draftUrl.isNotBlank(),
+                        onClick = {
+                            CustomMirrorUrls.normalizeAndValidate(draftUrl)
+                                .onSuccess { normalized ->
+                                    val editIdx = editingIndex
+                                    val next = if (editIdx != null && editIdx in mirrorList.indices) {
+                                        mirrorList.toMutableList().apply { this[editIdx] = normalized }.distinct()
+                                    } else {
+                                        (mirrorList + normalized).distinct()
+                                    }
+                                    persistMirrors(next)
+                                    draftUrl = ""
+                                    editingIndex = null
+                                    inputError = null
+                                }
+                                .onFailure { err ->
+                                    inputError = err.message ?: "Invalid URL"
+                                }
+                        }
+                    ) {
+                        Text(if (editingIndex != null) "Save" else "Add")
+                    }
+                }
+
+                inputError?.let { err ->
+                    Text(err, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                }
+
+                if (mirrorList.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                        mirrorList.forEachIndexed { idx, url ->
+                            val isTesting = url in testingUrls
+                            val result = testResults[url]
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (editingIndex == idx) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Text(
+                                            url,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        when {
+                                            isTesting -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                CircularProgressIndicator(Modifier.size(11.dp), strokeWidth = 1.8.dp)
+                                                Text("Testing scraper…", fontSize = 11.sp, color = MaterialTheme.colorScheme.dim)
+                                            }
+                                            result != null -> Text(
+                                                (if (result.ok) "✓ " else "✗ ") + result.message,
+                                                fontSize = 11.sp,
+                                                color = if (result.ok) AniVaultColors.Success else MaterialTheme.colorScheme.error,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    Spacer(Modifier.width(6.dp))
+                                    OutlinedButton(
+                                        onClick = {
+                                            testingUrls = testingUrls + url
+                                            vm.testCustomMirror(url) { res ->
+                                                testingUrls = testingUrls - url
+                                                testResults = testResults + (url to res)
+                                            }
+                                        },
+                                        enabled = !isTesting,
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Text("Test", fontSize = 12.sp)
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            editingIndex = idx
+                                            draftUrl = url
+                                            inputError = null
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.Edit, "Edit mirror $url", modifier = Modifier.size(17.dp))
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            val next = mirrorList.filterIndexed { i, _ -> i != idx }
+                                            persistMirrors(next)
+                                            if (editingIndex == idx) {
+                                                editingIndex = null
+                                                draftUrl = ""
+                                            } else if (editingIndex != null && editingIndex!! > idx) {
+                                                editingIndex = editingIndex!! - 1
+                                            }
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.DeleteOutline,
+                                            "Remove mirror $url",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

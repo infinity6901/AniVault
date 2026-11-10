@@ -24,7 +24,8 @@ data class LookupMedia(
     val nextEpisode: Int? = null,
     /** Epoch millis of the next episode's air time. */
     val nextAiringAt: Long? = null,
-    val airingStatus: String = ""
+    val airingStatus: String = "",
+    val averageScore: Float = 0f
 )
 
 data class RelatedTitle(val relation: String, val media: LookupMedia)
@@ -58,8 +59,8 @@ class AniListLookup @Inject constructor(@Named("api") client: OkHttpClient, pref
     private val http: HttpTransport = OkHttpTransport(client) { prefs.networkTimeoutSec }
     private val url = "https://graphql.anilist.co"
 
-    private val FIELDS = "id idMal title { romaji english } coverImage { large } genres episodes duration seasonYear season format isAdult " +
-        "status description(asHtml: false) nextAiringEpisode { episode airingAt }"
+    private val FIELDS = "id idMal title { romaji english } coverImage { extraLarge large } genres episodes duration seasonYear season format isAdult " +
+        "status averageScore description(asHtml: false) nextAiringEpisode { episode airingAt }"
 
     private suspend fun run(query: String, vars: JsonObject): JsonObject {
         val body = JsonObject().apply { addProperty("query", AniListAdapter.gql(query)); add("variables", vars) }
@@ -86,12 +87,12 @@ class AniListLookup @Inject constructor(@Named("api") client: OkHttpClient, pref
         return out
     }
 
-    /** Sequels, prequels and other related anime for one title, adult titles left out. */
-    suspend fun relations(id: Int, byMal: Boolean = false): List<RelatedTitle> =
-        extras(id, byMal).relations
+    /** Sequels, prequels and other related anime for one title, adult titles left out unless [includeAdult] is true. */
+    suspend fun relations(id: Int, byMal: Boolean = false, includeAdult: Boolean = false): List<RelatedTitle> =
+        extras(id, byMal, includeAdult).relations
 
     /** Studios, top characters with voice actors, official streaming links, and related franchise titles in one call. */
-    suspend fun extras(id: Int, byMal: Boolean = false): MediaExtras {
+    suspend fun extras(id: Int, byMal: Boolean = false, includeAdult: Boolean = false): MediaExtras {
         val idArg = if (byMal) "idMal: §id" else "id: §id"
         val q = "query (§id: Int) { Media($idArg, type: ANIME) { " +
             "studios(isMain: true) { nodes { name } } " +
@@ -100,6 +101,56 @@ class AniListLookup @Inject constructor(@Named("api") client: OkHttpClient, pref
             "relations { edges { relationType node { $FIELDS type } } } " +
             "} }"
         val media = run(q, JsonObject().apply { addProperty("id", id) }).obj("Media") ?: return MediaExtras()
+        return parseExtrasFromMediaObj(media, includeAdult)
+    }
+
+    /**
+     * Looks up both core [LookupMedia] (synopsis, format, year, status, score, genres) AND [MediaExtras]
+     * (studios, characters & voice actors, franchise relations including 18+, external links) for an H-Vault entry.
+     * Uses [anilistId] or [malId] when known, or searches AniList by [title] (including 18+ adult entries).
+     */
+    suspend fun lookupForVault(title: String, anilistId: Int? = null, malId: Int? = null): Pair<LookupMedia?, MediaExtras> {
+        val extraFields = "$FIELDS " +
+            "studios(isMain: true) { nodes { name } } " +
+            "characters(sort: [ROLE, RELEVANCE], perPage: 10) { edges { role node { id name { full } image { medium } } voiceActors(language: JAPANESE, sort: [RELEVANCE]) { name { full } } } } " +
+            "externalLinks { site url type } " +
+            "relations { edges { relationType node { $FIELDS type } } }"
+
+        val mediaObj: JsonObject? = when {
+            anilistId != null -> {
+                val q = "query (§id: Int) { Media(id: §id, type: ANIME) { $extraFields } }"
+                runCatching { run(q, JsonObject().apply { addProperty("id", anilistId) }).obj("Media") }.getOrNull()
+            }
+            malId != null -> {
+                val q = "query (§id: Int) { Media(idMal: §id, type: ANIME) { $extraFields } }"
+                runCatching { run(q, JsonObject().apply { addProperty("id", malId) }).obj("Media") }.getOrNull()
+            }
+            else -> null
+        } ?: run {
+            val clean = com.anivault.data.library.Franchise.cleanTitle(title).ifBlank { title }.trim()
+            if (clean.isEmpty()) return null to MediaExtras()
+            // Try adult search first on AniList, then general ANIME search
+            val qAdult = "query (§s: String) { Page(page: 1, perPage: 5) { media(search: §s, type: ANIME, isAdult: true, sort: [SEARCH_MATCH]) { $extraFields } } }"
+            val adultHits = runCatching {
+                run(qAdult, JsonObject().apply { addProperty("s", clean) }).obj("Page")?.arr("media")?.objects().orEmpty()
+            }.getOrDefault(emptyList())
+            if (adultHits.isNotEmpty()) {
+                adultHits.first()
+            } else {
+                val qAny = "query (§s: String) { Page(page: 1, perPage: 5) { media(search: §s, type: ANIME, sort: [SEARCH_MATCH]) { $extraFields } } }"
+                runCatching {
+                    run(qAny, JsonObject().apply { addProperty("s", clean) }).obj("Page")?.arr("media")?.objects()?.firstOrNull()
+                }.getOrNull()
+            }
+        }
+
+        if (mediaObj == null) return null to MediaExtras()
+        val parsedMedia = parse(mediaObj)
+        val parsedExtras = parseExtrasFromMediaObj(mediaObj, includeAdult = true)
+        return parsedMedia to parsedExtras
+    }
+
+    private fun parseExtrasFromMediaObj(media: JsonObject, includeAdult: Boolean): MediaExtras {
         val studios = media.obj("studios")?.arr("nodes")?.objects()?.mapNotNull { it.str("name")?.takeIf(String::isNotBlank) }.orEmpty().distinct()
         val characters = media.obj("characters")?.arr("edges")?.objects()?.mapNotNull { edge ->
             val node = edge.obj("node") ?: return@mapNotNull null
@@ -122,7 +173,7 @@ class AniListLookup @Inject constructor(@Named("api") client: OkHttpClient, pref
             val rel = e.str("relationType") ?: return@mapNotNull null
             val node = e.obj("node") ?: return@mapNotNull null
             if (rel !in wanted || node.str("type") != "ANIME") return@mapNotNull null
-            parse(node)?.takeIf { !it.adult }?.let { RelatedTitle(rel, it) }
+            parse(node)?.takeIf { includeAdult || !it.adult }?.let { RelatedTitle(rel, it) }
         }.sortedBy { listOf("PREQUEL", "PARENT", "SEQUEL").indexOf(it.relation).let { i -> if (i < 0) 9 else i } }
         return MediaExtras(studios, characters, links, rels)
     }
@@ -159,16 +210,18 @@ class AniListLookup @Inject constructor(@Named("api") client: OkHttpClient, pref
         val t = o.obj("title")
         val title = t?.str("english")?.takeIf { it.isNotBlank() } ?: t?.str("romaji") ?: return null
         val next = o.obj("nextAiringEpisode")
+        val cover = o.obj("coverImage")
         return LookupMedia(
             anilistId = id, malId = o.int("idMal"), title = title,
-            coverUrl = o.obj("coverImage")?.str("large").orEmpty(),
+            coverUrl = cover?.str("extraLarge")?.takeIf { it.isNotBlank() } ?: cover?.str("large").orEmpty(),
             genres = o.arr("genres")?.strings().orEmpty(),
             episodes = o.int("episodes") ?: 0, durationMinutes = o.int("duration") ?: 0,
             year = o.int("seasonYear"), season = o.str("season").orEmpty().lowercase(),
-            format = o.str("format").orEmpty(), adult = o.get("isAdult")?.takeIf { it.isJsonPrimitive }?.asBoolean == true,
+            format = prettyEnum(o.str("format")), adult = o.get("isAdult")?.takeIf { it.isJsonPrimitive }?.asBoolean == true,
             synopsis = HtmlText.clean(o.str("description")),
             nextEpisode = next?.int("episode"), nextAiringAt = next?.int("airingAt")?.let { it * 1000L },
-            airingStatus = o.str("status").orEmpty()
+            airingStatus = prettyEnum(o.str("status")),
+            averageScore = o.dbl("averageScore")?.let { (it / 10.0).toFloat() } ?: 0f
         )
     }
 }
