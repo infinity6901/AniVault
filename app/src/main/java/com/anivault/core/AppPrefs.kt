@@ -125,8 +125,8 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
 
     // ── H-Vault ────────────────────────────────────────────────────────────
     var vaultAutoLock: Boolean
-        get() = sp.getBoolean(K_VAULT_AUTOLOCK, K_VAULT_SCRAPER_PRIORITY, K_VAULT_AUTO_UNCENSOR, true)
-        set(v) = putBool(K_VAULT_AUTOLOCK, K_VAULT_SCRAPER_PRIORITY, K_VAULT_AUTO_UNCENSOR, v)
+        get() = sp.getBoolean(K_VAULT_AUTOLOCK, true)
+        set(v) = putBool(K_VAULT_AUTOLOCK, v)
     /** Seconds the app may stay in the background before the vault re-locks (0 = immediately). */
     var vaultLockTimeoutSec: Int
         get() = sp.getInt(K_VAULT_TIMEOUT, 0)

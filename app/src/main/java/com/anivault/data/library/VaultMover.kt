@@ -48,7 +48,7 @@ object VaultMapping {
         if (stashed != null) {
             return stashed.copy(
                 title = v.title.ifBlank { stashed.title },
-                imageUrl = stashed.imageUrl.ifBlank { v.imageUrl },
+                imageUrl = v.imageUrl.ifBlank { stashed.imageUrl },
                 totalEpisodes = if (v.totalEpisodes > 0) v.totalEpisodes else stashed.totalEpisodes,
                 watchedEpisodes = v.watchedEpisodes,
                 status = v.status,

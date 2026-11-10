@@ -256,7 +256,7 @@ private fun VaultContent(onBack: () -> Unit, vm: VaultViewModel) {
                                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                         Text(r.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
                                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            if (r.episodes > 0) Text("${r.episodes} eps", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
+                                            if (r.episodeCount > 0) Text("${r.episodeCount} eps", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
                                             if (!r.isCensored && !UncensoredCoverMatcher.isCensoredCatalogCover(r.coverUrl)) {
                                                 Tag("Uncensored Cover", MaterialTheme.colorScheme.primary)
                                             }

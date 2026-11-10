@@ -21,24 +21,6 @@ import javax.inject.Singleton
 /**
  * Self-healing multi-engine scraper modelled on the Aniyomi community extension architecture
  * (`eu.kanade.tachiyomi.animeextension.all.watchhentai` / `hentaihaven` / `dooplay` / `madara` / `wpjson`).
- *
- * Why traditional scrapers break on adult sites:
- *  1. Sites frequently switch between WordPress themes (DooPlay -> Madara -> AnimeStream -> Torofilm)
- *     or rename CSS classes (`div.flw-item` -> `article.TPost` -> `div.bsx`).
- *  2. Sites rotate mirror domains (`.net` -> `.org` -> `.xxx`).
- *
- * How this repository stays resilient:
- *  - **Engine 1 (WordPress Core REST API — `/wp-json/wp/v2/posts` & `/wp-json/wp/v2/series`)**:
- *    Queries WordPress's built-in REST API with `_embed=1` to pull `wp:featuredmedia` original
- *    full-resolution uncensored cover posters directly from JSON, completely bypassing HTML/CSS changes.
- *  - **Engine 2 (DooPlay AJAX JSON API — `/wp-json/dooplay/search/`)**:
- *    Parses the structured JSON map returned by DooPlay-based adult streaming sites.
- *  - **Engine 3 (Multi-Theme Adaptive HTML + JSON-LD + OpenGraph)**:
- *    Simultaneously supports DooPlay, Madara, AnimeStream/Themesia, Flix/Zoro, JSON-LD `ItemList`,
- *    and a structural semantic fallback (any card element containing an `<a href>` + `<img>` poster)
- *    with automatic WordPress thumbnail suffix stripping (`-150x150.jpg` -> `.jpg`).
- *  - **Multi-Mirror Failover**:
- *    Automatically iterates across built-in mirrors plus any custom mirrors configured in [AppPrefs.vaultCustomMirrors].
  */
 @Singleton
 class WatchHentaiScraperRepository @Inject constructor(
@@ -62,14 +44,6 @@ class WatchHentaiScraperRepository @Inject constructor(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
                 "AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/124.0.0.0 Safari/537.36"
-    }
-
-    constructor(okHttpClient: OkHttpClient) : this(okHttpClient, AppPrefsFallback.NOOP)
-
-    private object AppPrefsFallback {
-        val NOOP: AppPrefs by lazy {
-            throw UnsupportedOperationException("Use DI constructor with AppPrefs")
-        }
     }
 
     private fun activeMirrors(): List<String> {
@@ -265,12 +239,10 @@ object AniyomiAdaptiveParser {
     }
 
     private fun extractWpFeaturedMedia(post: JSONObject, baseUrl: String): String {
-        // 1. Direct jetpack / custom fields
         for (field in listOf("jetpack_featured_media_url", "featured_image_src", "featured_image_url", "poster")) {
             val direct = post.optString(field).trim()
             if (direct.startsWith("http")) return upgradeWordPressCoverUrl(direct, baseUrl)
         }
-        // 2. Standard _embedded["wp:featuredmedia"]
         val embedded = post.optJSONObject("_embedded")
         val mediaArr = embedded?.optJSONArray("wp:featuredmedia")
         if (mediaArr != null && mediaArr.length() > 0) {
@@ -285,7 +257,6 @@ object AniyomiAdaptiveParser {
                 if (fullUrl.isNotBlank()) return upgradeWordPressCoverUrl(fullUrl, baseUrl)
             }
         }
-        // 3. Fallback: first <img> inside content.rendered
         val renderedHtml = post.optJSONObject("content")?.optString("rendered").orEmpty()
         if (renderedHtml.isNotBlank()) {
             val doc = Jsoup.parse(renderedHtml, baseUrl)
@@ -300,7 +271,6 @@ object AniyomiAdaptiveParser {
 
     /**
      * Parses DooPlay AJAX search JSON (`/wp-json/dooplay/search/?keyword=...`).
-     * DooPlay returns an object keyed by post ID: `{"1234": {"title": "...", "url": "...", "img": "..."}}`.
      */
     fun parseDooPlaySearchJson(json: String, baseUrl: String = WatchHentaiScraperRepository.BASE_URL): List<ScrapedEntry> {
         val trimmed = json.trim()
@@ -343,78 +313,74 @@ object AniyomiAdaptiveParser {
     fun parseAdaptiveHtml(html: String, baseUrl: String = WatchHentaiScraperRepository.BASE_URL): List<ScrapedEntry> {
         val doc = Jsoup.parse(html, baseUrl)
 
-        // Pass 1: Known Aniyomi multi-theme selectors
         val cards = doc.select(MULTI_THEME_CARD_SELECTORS)
         val pass1 = cards.mapNotNull { parseCardElement(it, baseUrl) }.distinctBy { it.id }
         if (pass1.isNotEmpty()) return pass1
 
-        // Pass 2: JSON-LD structured data (`ItemList` / `VideoObject` / `Movie` / `TVSeries`)
         val jsonLd = parseJsonLdItems(doc, baseUrl)
         if (jsonLd.isNotEmpty()) return jsonLd
 
-        // Pass 3: Structural semantic heuristic — any `<article>` or container with a content link and poster image
         val semanticCandidates = doc.select("article, div.post, div.item, li.post-item, div.entry")
-        val pass3 = semanticCandidates.mapNotNull { parseCardElement(it, baseUrl) }.distinctBy { it.id }
-        return pass3
+        return semanticCandidates.mapNotNull { parseCardElement(it, baseUrl) }.distinctBy { it.id }
     }
 
-    private fun parseCardElement(card: Element, baseUrl: String): ScrapedEntry? = runCatching {
-        val anchor = card.selectFirst(LINK_SELECTORS) ?: return null
-        val rawHref = anchor.attr("href").trim().ifBlank { return null }
-        val href = when {
-            rawHref.startsWith("http") -> rawHref
-            rawHref.startsWith("/") -> "${baseUrl.trimEnd('/')}$rawHref"
-            else -> "${baseUrl.trimEnd('/')}/$rawHref"
-        }
-        // Ignore navigation/tag/category links when running semantic fallback
-        if (href.contains("/tag/") || href.contains("/genre/") || href.contains("/category/") || href.contains("/page/")) {
-            return null
-        }
+    private fun parseCardElement(card: Element, baseUrl: String): ScrapedEntry? {
+        return runCatching {
+            val anchor = card.selectFirst(LINK_SELECTORS) ?: return@runCatching null
+            val rawHref = anchor.attr("href").trim().ifBlank { return@runCatching null }
+            val href = when {
+                rawHref.startsWith("http") -> rawHref
+                rawHref.startsWith("/") -> "${baseUrl.trimEnd('/')}$rawHref"
+                else -> "${baseUrl.trimEnd('/')}/$rawHref"
+            }
+            if (href.contains("/tag/") || href.contains("/genre/") || href.contains("/category/") || href.contains("/page/")) {
+                return@runCatching null
+            }
 
-        val rawSlug = href.trimEnd('/').substringAfterLast("/").takeIf { it.isNotBlank() } ?: return null
-        val id = "watchhentai:$rawSlug"
+            val rawSlug = href.trimEnd('/').substringAfterLast("/").takeIf { it.isNotBlank() } ?: return@runCatching null
+            val id = "watchhentai:$rawSlug"
 
-        val imgEl = card.selectFirst("img")
-        val coverUrl = if (imgEl != null) {
-            extractImageFromElement(imgEl, baseUrl)
-        } else {
-            // Check inline style background-image on poster div
-            val styleEl = card.selectFirst("[style*='url(']")
-            val bgUrl = styleEl?.attr("style")
-                ?.substringAfter("url(", "")
-                ?.substringBefore(")", "")
-                ?.trim('"', ''', ' ')
-                .orEmpty()
-            upgradeWordPressCoverUrl(bgUrl, baseUrl)
-        }
-        if (coverUrl.isBlank()) return null
+            val imgEl = card.selectFirst("img")
+            val coverUrl = if (imgEl != null) {
+                extractImageFromElement(imgEl, baseUrl)
+            } else {
+                val styleEl = card.selectFirst("[style*='url(']")
+                val bgUrl = styleEl?.attr("style")
+                    ?.substringAfter("url(", "")
+                    ?.substringBefore(")", "")
+                    ?.trim('"', '\'', ' ')
+                    .orEmpty()
+                upgradeWordPressCoverUrl(bgUrl, baseUrl)
+            }
+            if (coverUrl.isBlank()) return@runCatching null
 
-        val title = card.selectFirst(TITLE_SELECTORS)?.text()?.trim()?.ifBlank { null }
-            ?: anchor.attr("title").trim().ifBlank { null }
-            ?: imgEl?.attr("alt")?.trim()?.ifBlank { null }
-            ?: return null
+            val title = card.selectFirst(TITLE_SELECTORS)?.text()?.trim()?.ifBlank { null }
+                ?: anchor.attr("title").trim().ifBlank { null }
+                ?: imgEl?.attr("alt")?.trim()?.ifBlank { null }
+                ?: return@runCatching null
 
-        val epCount = card.selectFirst("span.fdi-item:contains(Eps), div.tick-eps, span.epx, span.episode")
-            ?.text()
-            ?.filter { it.isDigit() }
-            ?.toIntOrNull()
-            ?.coerceAtLeast(1) ?: 1
+            val epCount = card.selectFirst("span.fdi-item:contains(Eps), div.tick-eps, span.epx, span.episode")
+                ?.text()
+                ?.filter { it.isDigit() }
+                ?.toIntOrNull()
+                ?.coerceAtLeast(1) ?: 1
 
-        val isCensored = title.contains("censored", ignoreCase = true) &&
-            !title.contains("uncensored", ignoreCase = true)
+            val isCensored = title.contains("censored", ignoreCase = true) &&
+                !title.contains("uncensored", ignoreCase = true)
 
-        ScrapedEntry(
-            id = id,
-            title = title,
-            coverUrl = coverUrl,
-            tags = emptyList(),
-            studio = null,
-            isCensored = isCensored,
-            episodeCount = epCount,
-            durationMinutes = 0,
-            detailUrl = href
-        )
-    }.getOrNull()
+            ScrapedEntry(
+                id = id,
+                title = title,
+                coverUrl = coverUrl,
+                tags = emptyList(),
+                studio = null,
+                isCensored = isCensored,
+                episodeCount = epCount,
+                durationMinutes = 0,
+                detailUrl = href
+            )
+        }.getOrNull()
+    }
 
     private fun parseJsonLdItems(doc: Document, baseUrl: String): List<ScrapedEntry> {
         val scripts = doc.select("script[type=application/ld+json]")

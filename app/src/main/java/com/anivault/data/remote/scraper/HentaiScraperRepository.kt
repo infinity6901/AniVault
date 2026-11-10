@@ -43,8 +43,6 @@ object HanimeAniyomiCodec {
 
     /**
      * Parses the JSON response from `https://search.htv-services.com/`.
-     * Note: `hits` in `search.htv-services.com` is returned as a JSON-encoded string containing a JSONArray
-     * (or directly as a JSONArray on some mirrors); we support both seamlessly.
      */
     fun parseSearchJson(rawJson: String): List<ScrapedEntry> {
         if (rawJson.isBlank()) return emptyList()
@@ -72,6 +70,8 @@ object HanimeAniyomiCodec {
                     if (tag.isNotEmpty()) tags += tag
                 }
             }
+            val durationMs = obj.optLong("duration_in_ms", 0L)
+            val durationMin = if (durationMs > 0L) (durationMs / 60_000L).toInt().coerceAtLeast(1) else 24
             out += ScrapedEntry(
                 id = "hanime:$slug",
                 title = name,
@@ -80,7 +80,7 @@ object HanimeAniyomiCodec {
                 studio = brand,
                 isCensored = isCensored,
                 episodeCount = 1,
-                durationMinutes = 24,
+                durationMinutes = durationMin,
                 detailUrl = "https://hanime.tv/videos/hentai/$slug"
             )
         }
@@ -129,10 +129,6 @@ object HanimeAniyomiCodec {
 
 /**
  * Primary H-Vault source for uncensored covers and metadata (`hanime.tv`).
- *
- * Upgraded to use the **Aniyomi `Hanime` extension JSON API protocol** (`https://search.htv-services.com/`
- * and `https://hanime.tv/api/v8/video?id=`) as its primary engine so it does not break when front-end
- * Vue/Nuxt HTML classes change, with automatic fallback to adaptive HTML/OpenGraph parsing.
  */
 @Singleton
 class HentaiScraperRepository @Inject constructor(
@@ -155,6 +151,7 @@ class HentaiScraperRepository @Inject constructor(
         private const val SEL_IMAGE = "img.search-result-image, img[data-src], img"
         private const val SEL_LINK = "a.search-result-cover-wrap, a[href*='/videos/hentai/']"
         private const val SEL_EP_BADGE = "span.episode-count"
+        private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
     }
 
     init {
@@ -163,11 +160,9 @@ class HentaiScraperRepository @Inject constructor(
 
     override suspend fun search(query: String, page: Int): List<ScrapedEntry> =
         withContext(Dispatchers.IO) {
-            // 1. Primary: Aniyomi Hanime JSON Search API (search.htv-services.com) — fast, uncensored covers, immune to HTML changes
             val apiResults = runCatching { searchViaAniyomiApi(query, page) }.getOrNull()
             if (!apiResults.isNullOrEmpty()) return@withContext apiResults
 
-            // 2. Fallback: HTML / OpenGraph scrape
             cfInterceptor.prewarm(BASE_URL)
             val url = BASE_URL + SEARCH_PATH.format(query.urlEncode(), page)
             val doc = fetchDocument(url)
@@ -177,7 +172,6 @@ class HentaiScraperRepository @Inject constructor(
     override suspend fun fetchDetail(detailUrl: String): ScrapedEntry? =
         withContext(Dispatchers.IO) {
             val slug = detailUrl.trimEnd('/').substringAfterLast("/").removePrefix("hanime:")
-            // 1. Primary: Aniyomi Hanime v8 Video JSON API
             val fromApi = runCatching {
                 val req = Request.Builder()
                     .url(VIDEO_API_URL.format(slug.urlEncode()))
@@ -192,7 +186,6 @@ class HentaiScraperRepository @Inject constructor(
             }.getOrNull()
             if (fromApi != null) return@withContext fromApi
 
-            // 2. Fallback: HTML detail page
             runCatching {
                 cfInterceptor.prewarm(BASE_URL)
                 parseDetailPage(fetchDocument(detailUrl), detailUrl)
@@ -215,8 +208,6 @@ class HentaiScraperRepository @Inject constructor(
             return HanimeAniyomiCodec.parseSearchJson(body)
         }
     }
-
-    // ── Vault helpers (kept for backward-compat) ───────────────────────────
 
     fun observeAll(): Flow<List<HVaultEntry>> = hVaultDao.observeAll()
 
@@ -247,8 +238,6 @@ class HentaiScraperRepository @Inject constructor(
     suspend fun deleteById(id: String) = withContext(Dispatchers.IO) {
         hVaultDao.deleteById(id)
     }
-
-    // ── HTML Fallback helpers ──────────────────────────────────────────────
 
     private fun fetchDocument(url: String, isRetry: Boolean = false): Document {
         val request = Request.Builder().url(url).get().build()
@@ -331,8 +320,4 @@ class HentaiScraperRepository @Inject constructor(
 
     private fun String.urlEncode(): String = URLEncoder.encode(this, "UTF-8")
     private fun String.ensureLeadingSlash(): String = if (startsWith("/")) this else "/$this"
-
-    private companion object {
-        const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
-    }
 }
