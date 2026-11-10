@@ -70,7 +70,7 @@ object HanimeAniyomiCodec {
             if (name.isEmpty()) continue
             val posterUrl = obj.optString("poster_url").trim()
             val cover = obj.optString("cover_url").trim().ifBlank { posterUrl }
-            val preview = posterUrl.ifBlank { cover }
+            val preview = if (posterUrl.isNotEmpty() && !AniyomiAdaptiveParser.sameImageAsset(posterUrl, cover)) posterUrl else ""
             val brand = obj.optString("brand").trim().ifBlank { null }
             val isCensored = obj.optBoolean("is_censored", false)
             val rawDesc = obj.optString("description").trim()
@@ -173,8 +173,7 @@ object HanimeAniyomiCodec {
                 val epSlug = epObj.optString("slug").trim()
                 val epName = epObj.optString("name").trim().ifBlank { "Episode ${i + 1}" }
                 val epPoster = epObj.optString("poster_url").trim()
-                    .ifBlank { epObj.optString("cover_url").trim() }
-                if (epPoster.isEmpty()) continue
+                if (epPoster.isEmpty() || AniyomiAdaptiveParser.sameImageAsset(epPoster, cover)) continue
                 val epDurMs = epObj.optLong("duration_in_ms", 0L)
                 val epDurMin = if (epDurMs > 0L) (epDurMs / 60_000L).toInt().coerceAtLeast(1) else durationMin
                 val epDate = epObj.optString("released_at").trim().take(10)
@@ -189,16 +188,36 @@ object HanimeAniyomiCodec {
                     sourceName = "hanime.tv"
                 )
             }
-        } else if (posterUrl.isNotEmpty() || cover.isNotEmpty()) {
+        } else if (posterUrl.isNotEmpty() && !AniyomiAdaptiveParser.sameImageAsset(posterUrl, cover)) {
             previews += VaultEpisodePreview(
                 episodeNumber = extractEpisodeNumber(title, 1),
                 title = title,
-                previewImageUrl = posterUrl.ifBlank { cover },
+                previewImageUrl = posterUrl,
                 durationMinutes = durationMin,
                 releaseDate = releasedAt,
                 detailUrl = "https://hanime.tv/videos/hentai/$slug",
                 sourceName = "hanime.tv"
             )
+        }
+
+        // Also extract any storyboard preview images from `hentai_video_storyboards`
+        val storyboards = root.optJSONArray("hentai_video_storyboards")
+        if (storyboards != null) {
+            for (s in 0 until storyboards.length()) {
+                val sbObj = storyboards.optJSONObject(s) ?: continue
+                val sbUrl = sbObj.optString("url").trim()
+                if (sbUrl.startsWith("https://") && !AniyomiAdaptiveParser.sameImageAsset(sbUrl, cover) && previews.none { it.previewImageUrl == sbUrl }) {
+                    previews += VaultEpisodePreview(
+                        episodeNumber = previews.size + 1,
+                        title = "$title · Storyboard ${s + 1}",
+                        previewImageUrl = sbUrl,
+                        durationMinutes = durationMin,
+                        releaseDate = releasedAt,
+                        detailUrl = "https://hanime.tv/videos/hentai/$slug",
+                        sourceName = "hanime.tv"
+                    )
+                }
+            }
         }
 
         val franchiseEps = (franchiseArr?.length() ?: 1).coerceAtLeast(previews.size.coerceAtLeast(1))

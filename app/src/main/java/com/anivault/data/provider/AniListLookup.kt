@@ -25,7 +25,8 @@ data class LookupMedia(
     /** Epoch millis of the next episode's air time. */
     val nextAiringAt: Long? = null,
     val airingStatus: String = "",
-    val averageScore: Float = 0f
+    val averageScore: Float = 0f,
+    val altTitles: List<String> = emptyList()
 )
 
 data class RelatedTitle(val relation: String, val media: LookupMedia)
@@ -59,7 +60,7 @@ class AniListLookup @Inject constructor(@Named("api") client: OkHttpClient, pref
     private val http: HttpTransport = OkHttpTransport(client) { prefs.networkTimeoutSec }
     private val url = "https://graphql.anilist.co"
 
-    private val FIELDS = "id idMal title { romaji english } coverImage { extraLarge large } genres episodes duration seasonYear season format isAdult " +
+    private val FIELDS = "id idMal title { romaji english native } synonyms coverImage { extraLarge large } genres episodes duration seasonYear season format isAdult " +
         "status averageScore description(asHtml: false) nextAiringEpisode { episode airingAt }"
 
     private suspend fun run(query: String, vars: JsonObject): JsonObject {
@@ -208,7 +209,14 @@ class AniListLookup @Inject constructor(@Named("api") client: OkHttpClient, pref
     private fun parse(o: JsonObject): LookupMedia? {
         val id = o.int("id") ?: return null
         val t = o.obj("title")
-        val title = t?.str("english")?.takeIf { it.isNotBlank() } ?: t?.str("romaji") ?: return null
+        val english = t?.str("english")?.takeIf { it.isNotBlank() }
+        val romaji = t?.str("romaji")?.takeIf { it.isNotBlank() }
+        val native = t?.str("native")?.takeIf { it.isNotBlank() }
+        val title = english ?: romaji ?: native ?: return null
+        val alt = (listOfNotNull(romaji, english, native) + o.arr("synonyms")?.strings().orEmpty())
+            .map { it.trim() }
+            .filter { it.isNotBlank() && !it.equals(title, ignoreCase = true) }
+            .distinct()
         val next = o.obj("nextAiringEpisode")
         val cover = o.obj("coverImage")
         return LookupMedia(
@@ -221,7 +229,8 @@ class AniListLookup @Inject constructor(@Named("api") client: OkHttpClient, pref
             synopsis = HtmlText.clean(o.str("description")),
             nextEpisode = next?.int("episode"), nextAiringAt = next?.int("airingAt")?.let { it * 1000L },
             airingStatus = prettyEnum(o.str("status")),
-            averageScore = o.dbl("averageScore")?.let { (it / 10.0).toFloat() } ?: 0f
+            averageScore = o.dbl("averageScore")?.let { (it / 10.0).toFloat() } ?: 0f,
+            altTitles = alt
         )
     }
 }

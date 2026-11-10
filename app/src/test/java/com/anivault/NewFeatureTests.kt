@@ -12,6 +12,7 @@ import com.anivault.data.local.entity.RemoteIds
 import com.anivault.data.local.model.WatchStatus
 import com.anivault.data.provider.AiringFormat
 import com.anivault.data.provider.RedirectOriginGuard
+import com.anivault.data.remote.model.PreviewScraperSource
 import com.anivault.data.remote.model.ScrapedEntry
 import com.anivault.data.remote.scraper.AniyomiAdaptiveParser
 import com.anivault.data.remote.scraper.CustomMirrorUrls
@@ -436,29 +437,47 @@ class NewFeatureTests {
         assertEquals(2, detail?.episodePreviews?.get(1)?.episodeNumber)
         assertEquals("https://static-assets.highwinds-cdn.com/posters/overflow-ep2.jpg", detail?.episodePreviews?.get(1)?.previewImageUrl)
 
-        val watchHentaiDetailHtml = """
+        val watchHentaiSeriesHtml = """
             <html><body>
-              <h1 class="entry-title">Succubus Stayed Life</h1>
+              <h1 class="entry-title">Akogare no Onna Joushi</h1>
               <div class="poster"><img src="https://watchhentai.net/wp-content/uploads/cover-185x278.jpg"/></div>
-              <div class="wp-content"><p>A detailed fantasy OVA synopsis that is more than twenty characters long.</p></div>
+              <div class="wp-content">
+                <p>As they work together, they grow closer, but Shota has never had the courage to ask Yui to be his girlfriend.</p>
+                <div id="dt_galery" class="galeria">
+                  <div class="g-item"><img data-src="https://watchhentai.net/wp-content/uploads/scene1-300x169.jpg"/></div>
+                  <div class="g-item"><img data-src="https://watchhentai.net/wp-content/uploads/scene2-300x169.jpg"/></div>
+                </div>
+              </div>
               <ul class="episodios">
                 <li>
-                  <div class="imagen"><img data-src="https://watchhentai.net/wp-content/uploads/ep1-300x169.jpg"/></div>
+                  <div class="imagen"><img data-src="https://watchhentai.net/wp-content/uploads/cover.jpg"/></div>
                   <div class="numerando">1 - 1</div>
-                  <div class="episodiotitle"><a href="https://watchhentai.net/videos/succubus-ep-1/">Episode 1</a><span class="date">2024-03-01</span></div>
-                </li>
-                <li>
-                  <div class="imagen"><img data-src="https://watchhentai.net/wp-content/uploads/ep2-300x169.jpg"/></div>
-                  <div class="numerando">1 - 2</div>
-                  <div class="episodiotitle"><a href="https://watchhentai.net/videos/succubus-ep-2/">Episode 2</a><span class="date">2024-04-01</span></div>
+                  <div class="episodiotitle"><a href="https://watchhentai.net/videos/akogare-ep-1/">Episode 1</a></div>
                 </li>
               </ul>
             </body></html>
         """.trimIndent()
-        val whDetail = AniyomiAdaptiveParser.parseAdaptiveDetailHtml(watchHentaiDetailHtml, "https://watchhentai.net/series/succubus-stayed-life/")
-        assertEquals("A detailed fantasy OVA synopsis that is more than twenty characters long.", whDetail.synopsis)
+        val whDetail = AniyomiAdaptiveParser.parseAdaptiveDetailHtml(watchHentaiSeriesHtml, "https://watchhentai.net/series/akogare-no-onna-joushi/")
+        assertTrue(whDetail.synopsis.contains("As they work together"))
         assertEquals(2, whDetail.episodePreviews.size)
-        assertEquals("https://watchhentai.net/wp-content/uploads/ep1.jpg", whDetail.episodePreviews[0].previewImageUrl)
-        assertEquals("watchhentai.net", whDetail.episodePreviews[0].sourceName)
+        assertEquals("https://watchhentai.net/wp-content/uploads/scene1.jpg", whDetail.episodePreviews[0].previewImageUrl)
+        assertEquals("https://watchhentai.net/wp-content/uploads/scene2.jpg", whDetail.episodePreviews[1].previewImageUrl)
+        assertFalse(whDetail.episodePreviews.any { it.previewImageUrl.contains("cover") })
+    }
+
+    @Test fun previewScraperSourceFallbackOrderStartsWithSelectedPrimary() {
+        assertEquals(PreviewScraperSource.WATCHHENTAI, PreviewScraperSource.parse(null))
+        assertEquals(PreviewScraperSource.HANIME, PreviewScraperSource.parse("hanime"))
+        assertEquals(PreviewScraperSource.HENTAIHAVEN, PreviewScraperSource.parse("hentaihaven"))
+        assertEquals(PreviewScraperSource.HSTREAM, PreviewScraperSource.parse("hstream"))
+
+        val orderFromHanime = PreviewScraperSource.fallbackOrder(PreviewScraperSource.HANIME)
+        assertEquals(PreviewScraperSource.HANIME, orderFromHanime.first())
+        assertEquals(PreviewScraperSource.values().size, orderFromHanime.distinct().size)
+
+        val orderFromHaven = PreviewScraperSource.fallbackOrder(PreviewScraperSource.HENTAIHAVEN)
+        assertEquals(PreviewScraperSource.HENTAIHAVEN, orderFromHaven.first())
+        assertTrue(PreviewScraperSource.WATCHHENTAI in orderFromHaven)
+        assertTrue(PreviewScraperSource.HANIME in orderFromHaven)
     }
 }

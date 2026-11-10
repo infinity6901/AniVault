@@ -10,6 +10,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -1080,101 +1082,28 @@ private fun VaultDetailSheet(original: HVaultEntry, allTags: List<String>, vm: V
 
             OutlinedTextField(e.notes, { e = e.copy(notes = it) }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
 
-            // ── Episode Previews (Fetched from Scrapers) ──
+            // ── Source Details, Synopsis & 16:9 Scene Preview Carousel ──
             val det = richDetails
             if (loadingRich) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                    Text("Loading source details & episode previews…", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
+                    Text("Loading source details & scene previews…", fontSize = 12.sp, color = MaterialTheme.colorScheme.dim)
                 }
             } else if (det != null) {
+                // ── Genres & Synopsis + Scene Preview Carousel (matching watchhentai.net/series/ layout) ──
+                if (det.genres.isNotEmpty()) {
+                    Text(det.genres.joinToString(" · "), fontSize = 13.sp, color = accent)
+                }
+                if (det.synopsis.isNotBlank()) {
+                    Text(det.synopsis, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+                }
                 if (det.episodePreviews.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "Episode Previews (${det.episodePreviews.size})",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 13.sp,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text("Tap to view / mark watched", fontSize = 11.sp, color = MaterialTheme.colorScheme.dim)
-                        }
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            items(det.episodePreviews, key = { "${it.episodeNumber}:${it.previewImageUrl}" }) { ep ->
-                                val watched = ep.episodeNumber <= e.watchedEpisodes
-                                AniCard(
-                                    Modifier.width(172.dp),
-                                    onClick = { activePreview = ep }
-                                ) {
-                                    Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Box {
-                                            Poster(
-                                                ep.previewImageUrl,
-                                                Modifier.fillMaxWidth().height(98.dp),
-                                                RoundedCornerShape(8.dp),
-                                                allowDiskCache = false
-                                            )
-                                            Surface(
-                                                shape = RoundedCornerShape(6.dp),
-                                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-                                                modifier = Modifier.align(Alignment.TopStart).padding(5.dp)
-                                            ) {
-                                                Row(
-                                                    Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                                ) {
-                                                    if (watched) {
-                                                        Icon(
-                                                            Icons.Default.CheckCircle,
-                                                            null,
-                                                            tint = AniVaultColors.Success,
-                                                            modifier = Modifier.size(11.dp)
-                                                        )
-                                                    }
-                                                    Text(
-                                                        "Ep ${ep.episodeNumber}",
-                                                        fontSize = 10.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = if (watched) AniVaultColors.Success else MaterialTheme.colorScheme.onSurface
-                                                    )
-                                                }
-                                            }
-                                            if (ep.sourceName.isNotBlank()) {
-                                                Surface(
-                                                    shape = RoundedCornerShape(6.dp),
-                                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-                                                    modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp)
-                                                ) {
-                                                    Text(
-                                                        ep.sourceName,
-                                                        Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-                                                        fontSize = 9.sp,
-                                                        fontWeight = FontWeight.SemiBold,
-                                                        color = MaterialTheme.colorScheme.primary
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        Text(
-                                            ep.title,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        val epSub = listOfNotNull(
-                                            ep.durationMinutes.takeIf { it > 0 }?.let { "${it}m" },
-                                            ep.releaseDate.takeIf { it.isNotBlank() }
-                                        ).joinToString(" · ")
-                                        if (epSub.isNotEmpty()) {
-                                            Text(epSub, fontSize = 10.sp, color = MaterialTheme.colorScheme.dim, maxLines = 1)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    VaultPreviewGalleryCarousel(
+                        previews = det.episodePreviews,
+                        previewsBySource = det.previewsBySource,
+                        accent = accent,
+                        onTapPreview = { activePreview = it }
+                    )
                 }
 
                 // ── Studios ──
@@ -1268,14 +1197,6 @@ private fun VaultDetailSheet(original: HVaultEntry, allTags: List<String>, vm: V
                         }
                     }
                 }
-
-                // ── Genres & Synopsis (matches normal library EntryDetailSheet) ──
-                if (det.genres.isNotEmpty()) {
-                    Text(det.genres.joinToString(" · "), fontSize = 13.sp, color = accent)
-                }
-                if (det.synopsis.isNotBlank()) {
-                    Text(det.synopsis, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
-                }
             }
 
             TextButton(onClick = { confirmMove = true }, Modifier.fillMaxWidth()) {
@@ -1347,4 +1268,117 @@ private fun VaultDetailSheet(original: HVaultEntry, allTags: List<String>, vm: V
     if (confirmMove) ConfirmDialog("Move to library?", "This title leaves H-Vault and appears in the normal library.", "Move", { confirmMove = false; vm.moveToLibrary(listOf(original.id)); onDismiss() }, { confirmMove = false })
     if (confirmDelete) ConfirmDialog("Remove from H-Vault?", "This entry will be deleted.", "Remove", { confirmDelete = false; vm.delete(original.id); onDismiss() }, { confirmDelete = false }, destructive = true)
     if (confirmDiscard) ConfirmDialog("Discard changes?", "Your edits have not been saved.", "Discard", { confirmDiscard = false; onDismiss() }, { confirmDiscard = false }, destructive = true)
+}
+
+/**
+ * 16:9 swipeable scene preview carousel with pill/dot pagination indicators (`• • ━━ • • • •`),
+ * matching the series preview gallery on `watchhentai.net/series/...`.
+ */
+@Composable
+private fun VaultPreviewGalleryCarousel(
+    previews: List<VaultEpisodePreview>,
+    previewsBySource: Map<String, List<VaultEpisodePreview>> = emptyMap(),
+    accent: Color,
+    onTapPreview: (VaultEpisodePreview) -> Unit
+) {
+    val sources = remember(previewsBySource) { previewsBySource.keys.toList() }
+    var selectedSource by remember(sources) { mutableStateOf(sources.firstOrNull()) }
+    val activePreviews = remember(previews, previewsBySource, selectedSource) {
+        val fromSource = selectedSource?.let { previewsBySource[it] }
+        if (!fromSource.isNullOrEmpty()) fromSource else previews
+    }
+    val pagerState = rememberPagerState(pageCount = { activePreviews.size })
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(selectedSource, activePreviews.size) {
+        if (pagerState.currentPage >= activePreviews.size && activePreviews.isNotEmpty()) {
+            pagerState.scrollToPage(0)
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Scene Previews (${activePreviews.size})",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            val currentSource = activePreviews.getOrNull(pagerState.currentPage)?.sourceName.orEmpty()
+            if (currentSource.isNotBlank()) {
+                Text(
+                    "${pagerState.currentPage + 1} / ${activePreviews.size} · $currentSource",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+
+        // Source switcher chips when multiple scrapers returned preview images for this show
+        if (sources.size > 1) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(sources, key = { it }) { srcName ->
+                    val count = previewsBySource[srcName]?.size ?: 0
+                    FilterChip(
+                        selected = selectedSource == srcName,
+                        onClick = {
+                            selectedSource = srcName
+                            scope.launch { pagerState.scrollToPage(0) }
+                        },
+                        label = { Text("$srcName ($count)", fontSize = 11.sp) }
+                    )
+                }
+            }
+        }
+
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxWidth(),
+            pageSpacing = 12.dp
+        ) { page ->
+            val item = activePreviews.getOrNull(page) ?: return@HorizontalPager
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable { onTapPreview(item) }
+            ) {
+                Poster(
+                    url = item.previewImageUrl,
+                    modifier = Modifier.fillMaxSize(),
+                    shape = RoundedCornerShape(14.dp),
+                    allowDiskCache = false
+                )
+            }
+        }
+
+        // Pagination dots indicator (`• • ━━ • • • • • • •`) matching the screenshot
+        if (activePreviews.size > 1) {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 2.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                repeat(activePreviews.size.coerceAtMost(15)) { idx ->
+                    val isSelected = pagerState.currentPage == idx
+                    Box(
+                        Modifier
+                            .padding(horizontal = 3.dp)
+                            .width(if (isSelected) 22.dp else 7.dp)
+                            .height(7.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(
+                                if (isSelected) Color(0xFFF5B301)
+                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.30f)
+                            )
+                            .clickable { scope.launch { pagerState.animateScrollToPage(idx) } }
+                    )
+                }
+            }
+        }
+    }
 }

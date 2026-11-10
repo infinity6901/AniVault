@@ -37,6 +37,7 @@ import com.anivault.core.VaultSession
 import com.anivault.data.library.LibrarySort
 import com.anivault.data.local.entity.HVaultEntry
 import com.anivault.data.local.model.WatchStatus
+import com.anivault.data.remote.model.PreviewScraperSource
 import com.anivault.data.remote.model.ScrapedEntry
 import com.anivault.data.remote.model.VaultRichDetails
 import com.anivault.data.remote.scraper.CustomMirrorUrls
@@ -159,6 +160,14 @@ class VaultViewModel @Inject constructor(
     }
 
     private val richDetailsCache = HashMap<String, VaultRichDetails>()
+    private val _previewScraper = MutableStateFlow(PreviewScraperSource.parse(prefs.vaultPreviewScraper))
+    val previewScraper: StateFlow<PreviewScraperSource> = _previewScraper.asStateFlow()
+
+    fun setPreviewScraper(source: PreviewScraperSource) {
+        _previewScraper.value = source
+        prefs.vaultPreviewScraper = source.key
+        richDetailsCache.clear()
+    }
 
     /** Loads rich metadata, characters, relations, synopsis, and scraper episode previews for [entry]. */
     fun loadRichDetails(entry: HVaultEntry, forceRefresh: Boolean = false, onDone: (VaultRichDetails) -> Unit) {
@@ -369,6 +378,7 @@ private fun VaultContent(onBack: () -> Unit, vm: VaultViewModel) {
 private fun UncensoredScraperSettingsCard(vm: VaultViewModel, entries: List<HVaultEntry>) {
     var scraperPriority by remember { mutableStateOf(vm.prefs.vaultScraperPriority) }
     var autoUncensor by remember { mutableStateOf(vm.prefs.vaultAutoUncensorCovers) }
+    val previewScraper by vm.previewScraper.collectAsStateWithLifecycle()
     var mirrorList by remember { mutableStateOf(CustomMirrorUrls.parseList(vm.prefs.vaultCustomMirrors)) }
     var draftUrl by remember { mutableStateOf("") }
     var editingIndex by remember { mutableStateOf<Int?>(null) }
@@ -393,8 +403,7 @@ private fun UncensoredScraperSettingsCard(vm: VaultViewModel, entries: List<HVau
                 Column(Modifier.weight(1f)) {
                     Text("Uncensored Cover Scrapers", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Text(
-                        if (scraperPriority) "Priority #1 · Hanime, WatchHentai, HentaiHaven & nhentai"
-                        else "Catalog priority · Auto-uncensor ${if (autoUncensor) "enabled" else "disabled"}",
+                        "Main preview scraper: ${previewScraper.label} (auto-fallback enabled)",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.dim,
                         maxLines = 1,
@@ -441,6 +450,31 @@ private fun UncensoredScraperSettingsCard(vm: VaultViewModel, entries: List<HVau
                     vm.prefs.vaultAutoUncensorCovers = it
                 }
 
+                Text("Main Scraper for Preview Images", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text(
+                    "Choose which scraper is queried first for 16:9 scene preview images. If a show isn't on the main scraper, the other scrapers are tried automatically as fallbacks.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.dim
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    PreviewScraperSource.values().forEach { src ->
+                        FilterChip(
+                            selected = previewScraper == src,
+                            onClick = { vm.setPreviewScraper(src) },
+                            label = { Text(src.label, fontSize = 12.sp) }
+                        )
+                    }
+                }
+                Text(
+                    previewScraper.description,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                 Text("Custom Mirror URLs", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 Text(
                     "Add custom domain mirrors if a scraper site changes its domain. The Aniyomi WP-JSON, DooPlay & multi-theme parser adapts automatically.",

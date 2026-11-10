@@ -10,6 +10,7 @@ import com.anivault.data.provider.ProviderResult
 import com.anivault.data.local.entity.RemoteIds
 import com.anivault.data.provider.AniListLookup
 import com.anivault.data.provider.StreamingLink
+import com.anivault.data.remote.model.PreviewScraperSource
 import com.anivault.data.remote.model.ScrapedEntry
 import com.anivault.data.remote.model.VaultEpisodePreview
 import com.anivault.data.remote.model.VaultRichDetails
@@ -266,222 +267,265 @@ class HentaiFallbackRepository @Inject constructor(
 
         val cleanTitle = Franchise.cleanTitle(entry.title).ifBlank { entry.title }.trim()
 
-        coroutineScope {
-            val catalogDeferred = async {
-                runCatching { aniListLookup.lookupForVault(entry.title, anilistId, malId) }
-                    .getOrDefault(null to com.anivault.data.provider.MediaExtras())
-            }
+        val (catalogMedia, catalogExtras) = runCatching {
+            aniListLookup.lookupForVault(entry.title, anilistId, malId)
+        }.getOrDefault(null to com.anivault.data.provider.MediaExtras())
 
-            val hanimeDeferred = async {
-                runCatching {
-                    val directDetail = if (entry.id.startsWith("hanime:")) {
+        val candidateQueries = (
+            listOf(cleanTitle, entry.title) +
+                catalogMedia?.altTitles.orEmpty().map { Franchise.cleanTitle(it).ifBlank { it } } +
+                stashed?.altTitles.orEmpty().map { Franchise.cleanTitle(it).ifBlank { it } }
+            )
+            .map { it.trim() }
+            .filter { it.length >= 2 }
+            .distinct()
+
+        val allTargetTitles = (
+            listOf(entry.title, cleanTitle) +
+                catalogMedia?.altTitles.orEmpty() +
+                stashed?.altTitles.orEmpty()
+            ).map { it.trim() }.filter { it.isNotBlank() }.distinct()
+
+        val preferredPreviewSource = PreviewScraperSource.parse(prefs.vaultPreviewScraper)
+        val fallbackChain = PreviewScraperSource.fallbackOrder(preferredPreviewSource)
+
+        suspend fun runSource(src: PreviewScraperSource): ScrapedEntry? = runCatching {
+            when (src) {
+                PreviewScraperSource.WATCHHENTAI ->
+                    fallback.fetchBestDetailFromMirrors(
+                        WatchHentaiScraperRepository.WATCHHENTAI_MIRRORS,
+                        candidateQueries,
+                        allTargetTitles
+                    )
+                PreviewScraperSource.HENTAIHAVEN ->
+                    fallback.fetchBestDetailFromMirrors(
+                        WatchHentaiScraperRepository.HENTAIHAVEN_MIRRORS,
+                        candidateQueries,
+                        allTargetTitles
+                    )
+                PreviewScraperSource.HSTREAM ->
+                    fallback.fetchBestDetailFromMirrors(
+                        WatchHentaiScraperRepository.HSTREAM_MIRRORS,
+                        candidateQueries,
+                        allTargetTitles
+                    )
+                PreviewScraperSource.CUSTOM -> {
+                    val custom = fallback.customMirrors()
+                    if (custom.isEmpty()) null
+                    else fallback.fetchBestDetailFromMirrors(custom, candidateQueries, allTargetTitles)
+                }
+                PreviewScraperSource.HANIME -> {
+                    if (entry.id.startsWith("hanime:")) {
                         val slug = entry.id.removePrefix("hanime:")
-                        primary.fetchDetail("https://hanime.tv/videos/hentai/$slug")
-                    } else null
-
-                    val searchHits = if (cleanTitle.isNotBlank()) {
-                        runCatching { primary.search(cleanTitle, 1) }.getOrDefault(emptyList())
-                            .filter { UncensoredCoverMatcher.similarity(entry.title, it.title) >= 0.35 }
-                    } else emptyList()
-
-                    val bestHit = directDetail
-                        ?: searchHits.firstOrNull()?.let { hit ->
-                            runCatching { primary.fetchDetail(hit.detailUrl) }.getOrNull() ?: hit
+                        val direct = primary.fetchDetail("https://hanime.tv/videos/hentai/$slug")
+                        if (direct != null) return@runCatching direct
+                    }
+                    var best: ScrapedEntry? = null
+                    for (q in candidateQueries.take(3)) {
+                        val hits = runCatching { primary.search(q, 1) }.getOrDefault(emptyList())
+                            .filter { hit -> allTargetTitles.any { t -> UncensoredCoverMatcher.similarity(t, hit.title) >= 0.34 } }
+                        val firstHit = hits.firstOrNull() ?: continue
+                        val detail = runCatching { primary.fetchDetail(firstHit.detailUrl) }.getOrNull() ?: firstHit
+                        // Also include 16:9 episode preview thumbnails from other franchise episode hits on Hanime
+                        val extraEps = hits.mapIndexedNotNull { idx, h ->
+                            val pUrl = h.previewUrl
+                            if (pUrl.isBlank() || AniyomiAdaptiveParser.sameImageAsset(pUrl, h.coverUrl)) null
+                            else VaultEpisodePreview(
+                                episodeNumber = HanimeAniyomiCodec.extractEpisodeNumber(h.title, idx + 1),
+                                title = h.title,
+                                previewImageUrl = pUrl,
+                                durationMinutes = h.durationMinutes,
+                                releaseDate = h.releaseYear?.toString().orEmpty(),
+                                detailUrl = h.detailUrl,
+                                sourceName = "hanime.tv"
+                            )
                         }
-
-                    val searchPreviews = searchHits.mapIndexedNotNull { idx, hit ->
-                        val img = hit.previewUrl.ifBlank { hit.coverUrl }
-                        if (img.isBlank()) null
-                        else VaultEpisodePreview(
-                            episodeNumber = HanimeAniyomiCodec.extractEpisodeNumber(hit.title, idx + 1),
-                            title = hit.title,
-                            previewImageUrl = img,
-                            durationMinutes = hit.durationMinutes,
-                            releaseDate = hit.releaseYear?.toString().orEmpty(),
-                            detailUrl = hit.detailUrl,
-                            sourceName = "hanime.tv"
-                        )
+                        val mergedPreviews = (detail.episodePreviews + extraEps).distinctBy { it.previewImageUrl }
+                        val enriched = detail.copy(episodePreviews = mergedPreviews)
+                        best = enriched
+                        if (enriched.episodePreviews.isNotEmpty()) break
                     }
-                    bestHit to searchPreviews
-                }.getOrDefault(null to emptyList())
-            }
-
-            val watchHentaiDeferred = async {
-                runCatching {
-                    val searchHits = if (cleanTitle.isNotBlank()) {
-                        runCatching { fallback.search(cleanTitle, 1) }.getOrDefault(emptyList())
-                            .filter { UncensoredCoverMatcher.similarity(entry.title, it.title) >= 0.35 }
-                    } else emptyList()
-
-                    val bestMatch = UncensoredCoverMatcher.bestMatch(entry.title, stashed?.altTitles.orEmpty(), searchHits, minScore = 0.35)
-                    val detail = bestMatch?.let { m ->
-                        runCatching { fallback.fetchDetail(m.detailUrl) }.getOrNull() ?: m
-                    }
-
-                    val searchPreviews = searchHits.mapIndexedNotNull { idx, hit ->
-                        val img = hit.previewUrl.ifBlank { hit.coverUrl }
-                        if (img.isBlank()) null
-                        else VaultEpisodePreview(
-                            episodeNumber = HanimeAniyomiCodec.extractEpisodeNumber(hit.title, idx + 1),
-                            title = hit.title,
-                            previewImageUrl = img,
-                            durationMinutes = if (hit.durationMinutes > 0) hit.durationMinutes else 24,
-                            releaseDate = hit.releaseYear?.toString().orEmpty(),
-                            detailUrl = hit.detailUrl,
-                            sourceName = hit.displaySource
-                        )
-                    }
-                    detail to searchPreviews
-                }.getOrDefault(null to emptyList())
-            }
-
-            val nhentaiDeferred = async {
-                runCatching {
+                    best
+                }
+                PreviewScraperSource.NHENTAI -> {
                     if (entry.id.startsWith("nhentai:")) {
                         nhentai.fetchDetail(entry.id)
-                    } else null
-                }.getOrNull()
-            }
-
-            val (catalogMedia, catalogExtras) = catalogDeferred.await()
-            val (hanimeDetail, hanimeSearchPreviews) = hanimeDeferred.await()
-            val (whDetail, whSearchPreviews) = watchHentaiDeferred.await()
-            val nhDetail = nhentaiDeferred.await()
-
-            // Combine episode previews (preferring structured detail episode lists, then search episode hits)
-            val combinedPreviews = (
-                hanimeDetail?.episodePreviews.orEmpty() +
-                    whDetail?.episodePreviews.orEmpty() +
-                    hanimeSearchPreviews +
-                    whSearchPreviews +
-                    nhDetail?.episodePreviews.orEmpty()
-                )
-                .filter { it.previewImageUrl.isNotBlank() }
-                .distinctBy { it.previewImageUrl }
-                .sortedWith(compareBy<VaultEpisodePreview> { it.episodeNumber }.thenBy { it.title })
-
-            val synopsis = listOfNotNull(
-                hanimeDetail?.synopsis?.takeIf { it.isNotBlank() },
-                whDetail?.synopsis?.takeIf { it.isNotBlank() },
-                stashed?.synopsis?.takeIf { it.isNotBlank() },
-                catalogMedia?.synopsis?.takeIf { it.isNotBlank() }
-            ).maxByOrNull { it.length }.orEmpty()
-
-            val format = stashed?.format?.takeIf { it.isNotBlank() }
-                ?: catalogMedia?.format?.takeIf { it.isNotBlank() }
-                ?: "OVA"
-
-            val year = stashed?.year
-                ?: catalogMedia?.year
-                ?: hanimeDetail?.releaseYear
-                ?: whDetail?.releaseYear
-
-            val season = stashed?.season?.takeIf { it.isNotBlank() }
-                ?: catalogMedia?.season?.takeIf { it.isNotBlank() }
-                .orEmpty()
-
-            val airingStatus = stashed?.airingStatus?.takeIf { it.isNotBlank() }
-                ?: catalogMedia?.airingStatus?.takeIf { it.isNotBlank() }
-                .orEmpty()
-
-            val communityScore = listOfNotNull(
-                stashed?.providerScore?.takeIf { it > 0f },
-                catalogMedia?.averageScore?.takeIf { it > 0f },
-                hanimeDetail?.ratingScore?.takeIf { it > 0f },
-                whDetail?.ratingScore?.takeIf { it > 0f }
-            ).firstOrNull() ?: 0f
-
-            val studios = (
-                listOfNotNull(
-                    entry.studio?.takeIf { it.isNotBlank() },
-                    hanimeDetail?.studio?.takeIf { it.isNotBlank() },
-                    whDetail?.studio?.takeIf { it.isNotBlank() },
-                    nhDetail?.studio?.takeIf { it.isNotBlank() }
-                ) + catalogExtras.studios
-                ).distinct()
-
-            val genres = (
-                catalogMedia?.genres.orEmpty() +
-                    stashed?.genres.orEmpty() +
-                    entry.tags +
-                    hanimeDetail?.tags.orEmpty() +
-                    whDetail?.tags.orEmpty()
-                ).map { it.trim() }.filter { it.isNotBlank() }.distinct()
-
-            val sourcesUsed = buildList {
-                if (hanimeDetail != null || hanimeSearchPreviews.isNotEmpty()) add("hanime.tv")
-                if (whDetail != null || whSearchPreviews.isNotEmpty()) add(whDetail?.displaySource ?: "watchhentai.net")
-                if (nhDetail != null) add("nhentai.net")
-                if (catalogMedia != null) add("AniList")
-                else if (stashed?.sourceName?.isNotBlank() == true) add(stashed.sourceName)
-            }.distinct()
-
-            val scraperLinks = buildList {
-                hanimeDetail?.detailUrl?.takeIf { it.startsWith("https://") }?.let { add(StreamingLink("hanime.tv", it)) }
-                whDetail?.detailUrl?.takeIf { it.startsWith("https://") }?.let { add(StreamingLink(whDetail.displaySource, it)) }
-                nhDetail?.detailUrl?.takeIf { it.startsWith("https://") }?.let { add(StreamingLink("nhentai.net", it)) }
-            }
-            val allLinks = (scraperLinks + catalogExtras.links).distinctBy { it.url }
-
-            val resolvedEps = maxOf(
-                entry.totalEpisodes,
-                catalogMedia?.episodes ?: 0,
-                hanimeDetail?.episodeCount ?: 0,
-                whDetail?.episodeCount ?: 0,
-                combinedPreviews.size
-            )
-            val resolvedDur = when {
-                entry.durationMinutes > 0 -> entry.durationMinutes
-                (hanimeDetail?.durationMinutes ?: 0) > 0 -> hanimeDetail!!.durationMinutes
-                (catalogMedia?.durationMinutes ?: 0) > 0 -> catalogMedia!!.durationMinutes
-                else -> 24
-            }
-
-            // Backfill missing studio / totalEpisodes / durationMinutes / uncensored cover onto the HVaultEntry
-            val bestUncensoredCover = if (prefs.vaultAutoUncensorCovers && UncensoredCoverMatcher.isCensoredCatalogCover(entry.imageUrl)) {
-                hanimeDetail?.coverUrl?.takeIf { it.isNotBlank() }
-                    ?: whDetail?.coverUrl?.takeIf { it.isNotBlank() }
-                    ?: entry.imageUrl
-            } else entry.imageUrl
-
-            val currentInDb = hVaultDao.getById(entry.id)
-            if (currentInDb != null) {
-                val newStudio = currentInDb.studio?.takeIf { it.isNotBlank() } ?: studios.firstOrNull()
-                val newEps = if (currentInDb.totalEpisodes > 0) currentInDb.totalEpisodes else resolvedEps
-                val newDur = if (currentInDb.durationMinutes > 0) currentInDb.durationMinutes else resolvedDur
-                val newImg = if (UncensoredCoverMatcher.isCensoredCatalogCover(currentInDb.imageUrl) && bestUncensoredCover.isNotBlank()) bestUncensoredCover else currentInDb.imageUrl
-                if (newStudio != currentInDb.studio || newEps != currentInDb.totalEpisodes || newDur != currentInDb.durationMinutes || newImg != currentInDb.imageUrl) {
-                    hVaultDao.upsert(
-                        currentInDb.copy(
-                            studio = newStudio,
-                            totalEpisodes = newEps,
-                            durationMinutes = newDur,
-                            imageUrl = newImg
-                        )
-                    )
+                    } else {
+                        var best: ScrapedEntry? = null
+                        for (q in candidateQueries.take(2)) {
+                            val hits = runCatching { nhentai.search(q, 1) }.getOrDefault(emptyList())
+                                .filter { hit -> allTargetTitles.any { t -> UncensoredCoverMatcher.similarity(t, hit.title) >= 0.35 } }
+                            val firstHit = hits.firstOrNull() ?: continue
+                            best = runCatching { nhentai.fetchDetail(firstHit.detailUrl) }.getOrNull() ?: firstHit
+                            if (best?.episodePreviews?.isNotEmpty() == true) break
+                        }
+                        best
+                    }
                 }
             }
+        }.getOrNull()
 
-            VaultRichDetails(
-                synopsis = synopsis,
-                format = format,
-                year = year,
-                season = season,
-                airingStatus = airingStatus,
-                communityScore = communityScore,
-                sourceLabel = sourcesUsed.joinToString(" · "),
-                studios = studios,
-                genres = genres,
-                altTitles = stashed?.altTitles.orEmpty(),
-                episodeCount = resolvedEps,
-                durationMinutes = resolvedDur,
-                episodePreviews = combinedPreviews,
-                galleryImages = combinedPreviews.map { it.previewImageUrl }.distinct(),
-                characters = catalogExtras.characters,
-                relations = catalogExtras.relations,
-                links = allLinks
-            )
+        // Try the user's selected Main Preview Scraper first; if it doesn't have the show or has no preview images,
+        // automatically fall back through the remaining scrapers in priority order!
+        val resultsBySource = LinkedHashMap<PreviewScraperSource, ScrapedEntry>()
+        val primaryResult = runSource(preferredPreviewSource)
+        if (primaryResult != null) {
+            resultsBySource[preferredPreviewSource] = primaryResult
         }
+
+        // Run remaining fallback scrapers concurrently if primary had no previews or to enrich metadata/fallback tabs
+        coroutineScope {
+            val remaining = fallbackChain.drop(1)
+            val deferredMap = remaining.associateWith { src -> async { runSource(src) } }
+            for (src in remaining) {
+                val res = deferredMap[src]?.await()
+                if (res != null) {
+                    resultsBySource[src] = res
+                }
+            }
+        }
+
+        val orderedDetails = fallbackChain.mapNotNull { resultsBySource[it] }
+
+        val knownCovers = (
+            listOfNotNull(
+                entry.imageUrl.takeIf { it.isNotBlank() },
+                catalogMedia?.coverUrl?.takeIf { it.isNotBlank() },
+                stashed?.imageUrl?.takeIf { it.isNotBlank() }
+            ) + orderedDetails.mapNotNull { it.coverUrl.takeIf(String::isNotBlank) }
+            ).distinct()
+
+        val previewsBySource = LinkedHashMap<String, List<VaultEpisodePreview>>()
+        for ((srcEnum, detail) in resultsBySource) {
+            val cleanList = detail.episodePreviews
+                .filter { p ->
+                    p.previewImageUrl.isNotBlank() &&
+                        knownCovers.none { cov -> AniyomiAdaptiveParser.sameImageAsset(p.previewImageUrl, cov) }
+                }
+                .distinctBy { it.previewImageUrl }
+            if (cleanList.isNotEmpty()) {
+                val label = detail.displaySource.ifBlank { srcEnum.label }
+                previewsBySource[label] = (previewsBySource[label].orEmpty() + cleanList).distinctBy { it.previewImageUrl }
+            }
+        }
+
+        // Primary preview list is from the first scraper in fallbackChain that returned non-empty previews,
+        // followed by any additional unique previews from fallback scrapers
+        val winningPreviewSource = previewsBySource.keys.firstOrNull().orEmpty()
+        val combinedPreviews = previewsBySource.values.flatten().distinctBy { it.previewImageUrl }
+
+        val synopsis = (
+            orderedDetails.mapNotNull { it.synopsis.takeIf(String::isNotBlank) } +
+                listOfNotNull(
+                    stashed?.synopsis?.takeIf { it.isNotBlank() },
+                    catalogMedia?.synopsis?.takeIf { it.isNotBlank() }
+                )
+            ).maxByOrNull { it.length }.orEmpty()
+
+        val format = stashed?.format?.takeIf { it.isNotBlank() }
+            ?: catalogMedia?.format?.takeIf { it.isNotBlank() }
+            ?: "OVA"
+
+        val year = stashed?.year
+            ?: catalogMedia?.year
+            ?: orderedDetails.firstNotNullOfOrNull { it.releaseYear }
+
+        val season = stashed?.season?.takeIf { it.isNotBlank() }
+            ?: catalogMedia?.season?.takeIf { it.isNotBlank() }
+            .orEmpty()
+
+        val airingStatus = stashed?.airingStatus?.takeIf { it.isNotBlank() }
+            ?: catalogMedia?.airingStatus?.takeIf { it.isNotBlank() }
+            .orEmpty()
+
+        val communityScore = (
+            listOfNotNull(
+                stashed?.providerScore?.takeIf { it > 0f },
+                catalogMedia?.averageScore?.takeIf { it > 0f }
+            ) + orderedDetails.mapNotNull { it.ratingScore.takeIf { s -> s > 0f } }
+            ).firstOrNull() ?: 0f
+
+        val studios = (
+            listOfNotNull(entry.studio?.takeIf { it.isNotBlank() }) +
+                orderedDetails.mapNotNull { it.studio?.takeIf(String::isNotBlank) } +
+                catalogExtras.studios
+            ).distinct()
+
+        val genres = (
+            catalogMedia?.genres.orEmpty() +
+                stashed?.genres.orEmpty() +
+                entry.tags +
+                orderedDetails.flatMap { it.tags }
+            ).map { it.trim() }.filter { it.isNotBlank() }.distinct()
+
+        val sourcesUsed = buildList {
+            orderedDetails.forEach { add(it.displaySource) }
+            if (catalogMedia != null) add("AniList")
+            else if (stashed?.sourceName?.isNotBlank() == true) add(stashed.sourceName)
+        }.distinct()
+
+        val scraperLinks = orderedDetails.mapNotNull { det ->
+            det.detailUrl.takeIf { it.startsWith("https://") }?.let { StreamingLink(det.displaySource, it) }
+        }
+        val allLinks = (scraperLinks + catalogExtras.links).distinctBy { it.url }
+
+        val resolvedEps = maxOf(
+            entry.totalEpisodes,
+            catalogMedia?.episodes ?: 0,
+            orderedDetails.maxOfOrNull { it.episodeCount } ?: 0
+        )
+        val resolvedDur = when {
+            entry.durationMinutes > 0 -> entry.durationMinutes
+            orderedDetails.any { it.durationMinutes > 0 } -> orderedDetails.first { it.durationMinutes > 0 }.durationMinutes
+            (catalogMedia?.durationMinutes ?: 0) > 0 -> catalogMedia!!.durationMinutes
+            else -> 24
+        }
+
+        val bestUncensoredCover = if (prefs.vaultAutoUncensorCovers && UncensoredCoverMatcher.isCensoredCatalogCover(entry.imageUrl)) {
+            orderedDetails.firstNotNullOfOrNull { d ->
+                d.coverUrl.takeIf { it.isNotBlank() && !UncensoredCoverMatcher.isCensoredCatalogCover(it) }
+            } ?: entry.imageUrl
+        } else entry.imageUrl
+
+        val currentInDb = hVaultDao.getById(entry.id)
+        if (currentInDb != null) {
+            val newStudio = currentInDb.studio?.takeIf { it.isNotBlank() } ?: studios.firstOrNull()
+            val newEps = if (currentInDb.totalEpisodes > 0) currentInDb.totalEpisodes else resolvedEps
+            val newDur = if (currentInDb.durationMinutes > 0) currentInDb.durationMinutes else resolvedDur
+            val newImg = if (UncensoredCoverMatcher.isCensoredCatalogCover(currentInDb.imageUrl) && bestUncensoredCover.isNotBlank()) bestUncensoredCover else currentInDb.imageUrl
+            if (newStudio != currentInDb.studio || newEps != currentInDb.totalEpisodes || newDur != currentInDb.durationMinutes || newImg != currentInDb.imageUrl) {
+                hVaultDao.upsert(
+                    currentInDb.copy(
+                        studio = newStudio,
+                        totalEpisodes = newEps,
+                        durationMinutes = newDur,
+                        imageUrl = newImg
+                    )
+                )
+            }
+        }
+
+        VaultRichDetails(
+            synopsis = synopsis,
+            format = format,
+            year = year,
+            season = season,
+            airingStatus = airingStatus,
+            communityScore = communityScore,
+            sourceLabel = sourcesUsed.joinToString(" · "),
+            primaryPreviewSource = winningPreviewSource,
+            studios = studios,
+            genres = genres,
+            altTitles = allTargetTitles,
+            episodeCount = resolvedEps,
+            durationMinutes = resolvedDur,
+            episodePreviews = combinedPreviews,
+            previewsBySource = previewsBySource,
+            galleryImages = combinedPreviews.map { it.previewImageUrl }.distinct(),
+            characters = catalogExtras.characters,
+            relations = catalogExtras.relations,
+            links = allLinks
+        )
     }
 
     suspend fun testCustomMirror(url: String): MirrorTestResult =

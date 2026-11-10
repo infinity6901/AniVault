@@ -143,6 +143,10 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
     var vaultCustomMirrors: String
         get() = sp.getString(K_VAULT_MIRRORS, "") ?: ""
         set(v) = putString(K_VAULT_MIRRORS, v)
+    /** Primary scraper for H-Vault scene preview images ("watchhentai" | "hanime" | "hentaihaven" | "hstream" | "nhentai" | "custom"). */
+    var vaultPreviewScraper: String
+        get() = sp.getString(K_VAULT_PREVIEW_SCRAPER, "watchhentai") ?: "watchhentai"
+        set(v) = putString(K_VAULT_PREVIEW_SCRAPER, v)
     /** H-Vault library layout: "grid" | "list" (defaults to libraryView when unset). */
     var vaultView: String
         get() = sp.getString(K_VAULT_VIEW, null) ?: libraryView
@@ -250,6 +254,7 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         const val K_VAULT_SCRAPER_PRIORITY = "vault_scraper_priority"
         const val K_VAULT_AUTO_UNCENSOR = "vault_auto_uncensor_covers"
         const val K_VAULT_MIRRORS = "vault_custom_mirrors"
+        const val K_VAULT_PREVIEW_SCRAPER = "vault_preview_scraper"
         const val K_VAULT_VIEW = "vault_view"
         const val K_VAULT_SORT = "vault_sort"
         const val K_VAULT_STATUS = "vault_status_filter"
@@ -275,7 +280,7 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
             K_GLASS_TINT, K_GLASS_OPACITY, K_GLASS_SPECULAR, K_GLASS_BLUR, K_GLASS_ANIMATED, K_GLASS_FLOATING_NAV,
             K_WIDGET_GLASS, K_WIDGET_GLASS_OPACITY, K_WIDGET_GLASS_COVER,
             K_CONFIRM_DELETE, K_DEFAULT_STATUS, K_AUTO_COMPLETE, K_PLUS_ONE,
-            K_SYNOPSIS, K_LIB_VIEW, K_LIB_SORT, K_GRID_DENSITY, K_POSTER_BADGE, K_SWIPE_GESTURES, K_SMART_LISTS, K_VAULT_SCRAPER_PRIORITY, K_VAULT_AUTO_UNCENSOR, K_VAULT_MIRRORS, K_VAULT_VIEW, K_VAULT_SORT, K_VAULT_STATUS, K_VAULT_GROUPED, K_VAULT_UNCENSORED_ONLY, K_VAULT_SHOW_STATS,
+            K_SYNOPSIS, K_LIB_VIEW, K_LIB_SORT, K_GRID_DENSITY, K_POSTER_BADGE, K_SWIPE_GESTURES, K_SMART_LISTS, K_VAULT_SCRAPER_PRIORITY, K_VAULT_AUTO_UNCENSOR, K_VAULT_MIRRORS, K_VAULT_PREVIEW_SCRAPER, K_VAULT_VIEW, K_VAULT_SORT, K_VAULT_STATUS, K_VAULT_GROUPED, K_VAULT_UNCENSORED_ONLY, K_VAULT_SHOW_STATS,
             K_NET_TIMEOUT, K_NET_RETRIES, K_FALLBACK_EMPTY,
             K_CONFLICT, K_DELETE_REMOTE, K_MARK_VAULT, K_QUIET_START, K_QUIET_END
         )

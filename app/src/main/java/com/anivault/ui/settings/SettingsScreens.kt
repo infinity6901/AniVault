@@ -31,6 +31,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.anivault.data.backup.RestoreMode
 import com.anivault.data.local.model.WatchStatus
+import com.anivault.data.remote.model.PreviewScraperSource
 import com.anivault.data.sync.AccountProvider
 import com.anivault.data.sync.ConflictPolicy
 import com.anivault.di.MigrationStatus
@@ -535,6 +536,7 @@ fun BackupScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
 fun VaultSettingsScreen(onBack: () -> Unit, onOpenVault: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
     var auto by remember { mutableStateOf(vm.prefs.vaultAutoLock) }
     var timeout by remember { mutableStateOf(vm.prefs.vaultLockTimeoutSec) }
+    var previewSrc by remember { mutableStateOf(PreviewScraperSource.parse(vm.prefs.vaultPreviewScraper)) }
     val migration by vm.migrationStatus.collectAsStateWithLifecycle()
     val keyLost by vm.health.keyLost.collectAsStateWithLifecycle()
     var confirmRemove by remember { mutableStateOf(false) }
@@ -544,6 +546,14 @@ fun VaultSettingsScreen(onBack: () -> Unit, onOpenVault: () -> Unit, vm: Setting
         GroupLabel("Auto-lock")
         SwitchRow("Lock when leaving the app", null, auto) { auto = it; vm.prefs.vaultAutoLock = it }
         if (auto) ChoiceGroup(listOf(0 to "Immediately", 30 to "After 30 seconds", 60 to "After 1 minute", 300 to "After 5 minutes"), timeout, { timeout = it; vm.prefs.vaultLockTimeoutSec = it })
+        GroupLabel("Scene Preview Scraper")
+        Note("Choose the main scraper for 16:9 scene preview images in H-Vault. Other scrapers are used automatically as fallbacks when a show is missing.")
+        ChoiceGroup(
+            PreviewScraperSource.values().map { it to it.label },
+            previewSrc,
+            { previewSrc = it; vm.prefs.vaultPreviewScraper = it.key },
+            { it.description }
+        )
         GroupLabel("Storage")
         if (keyLost) Text("The device's encryption key was unavailable, so the old database was set aside (not deleted) and a new one started. Restore from a backup to recover entries.", color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
         when (val m = migration) {
