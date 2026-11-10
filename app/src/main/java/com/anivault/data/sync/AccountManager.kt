@@ -20,17 +20,67 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
+import java.net.URLDecoder
 import java.net.URLEncoder
+import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.Base64
 import javax.inject.Inject
 import javax.inject.Named
 import javax.inject.Singleton
 
 /**
+ * Pure, JVM-testable OAuth security helpers for PKCE S256 and mandatory state validation.
+ */
+object OAuthSecurity {
+    private val enc = { s: String -> URLEncoder.encode(s, "UTF-8") }
+
+    /** Computes RFC 7636 S256 challenge: BASE64URL-UNPADDED(SHA256(ASCII(verifier))). */
+    fun pkceS256Challenge(verifier: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII))
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
+    }
+
+    fun buildAniListAuthUrl(clientId: String, state: String): String =
+        "https://anilist.co/api/v2/oauth/authorize?client_id=${enc(clientId)}&response_type=token&state=${enc(state)}"
+
+    fun buildMalAuthUrl(clientId: String, verifier: String, state: String, redirectUri: String): String {
+        val challenge = pkceS256Challenge(verifier)
+        return "https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=${enc(clientId)}" +
+            "&code_challenge=${enc(challenge)}&code_challenge_method=S256&state=${enc(state)}" +
+            "&redirect_uri=${enc(redirectUri)}"
+    }
+
+    /**
+     * Enforces mandatory, non-expired, constant-time state verification for OAuth callbacks.
+     * Rejects missing `pendingRecord`, missing `returnedState`, expired TTLs, and state mismatches.
+     */
+    fun verifyCallbackState(
+        pendingRecord: String?,
+        returnedStateRaw: String?,
+        nowMs: Long,
+        ttlMs: Long = AccountManager.AUTH_TTL_MS
+    ): Boolean {
+        if (pendingRecord.isNullOrBlank() || returnedStateRaw.isNullOrBlank()) return false
+        val parts = pendingRecord.split(':', limit = 2)
+        if (parts.size != 2) return false
+        val issuedAt = parts[0].toLongOrNull() ?: return false
+        val expectedState = parts[1]
+        if (expectedState.isBlank()) return false
+        if (nowMs - issuedAt !in 0..ttlMs) return false
+        val returnedState = runCatching { URLDecoder.decode(returnedStateRaw, "UTF-8") }.getOrDefault(returnedStateRaw)
+        return MessageDigest.isEqual(
+            expectedState.toByteArray(Charsets.UTF_8),
+            returnedState.toByteArray(Charsets.UTF_8)
+        )
+    }
+}
+
+/**
  * Owns sign-in for AniList / MyAnimeList / Kitsu (spec §12).
  *
- *  • AniList: browser sign-in (implicit grant) → token arrives in the redirect fragment.
- *  • MyAnimeList: browser sign-in with PKCE → code exchanged for access + refresh token.
+ *  • AniList: browser sign-in (implicit grant) → token arrives in the redirect fragment (mandatory state check).
+ *  • MyAnimeList: browser sign-in with PKCE (S256) → code exchanged for access + refresh token.
  *  • Kitsu: password grant. The password is sent once to Kitsu and never stored or logged.
  *
  * Tokens and client ids are kept only in [SecureStore]. Client ids are supplied by the user –
@@ -70,13 +120,12 @@ class AccountManager @Inject constructor(
     /** URL to open in the browser, or null when the provider doesn't use a browser sign-in. */
     fun authorizeUrl(p: AccountProvider): String? {
         val id = clientId(p)?.takeIf { it.isNotBlank() } ?: return null
-        val enc = { s: String -> URLEncoder.encode(s, "UTF-8") }
         val now = System.currentTimeMillis().toString()
         return when (p) {
             AccountProvider.ANILIST -> {
                 val state = randomString(24)
                 secure.put("acct_pending:anilist", "$now:$state")
-                "https://anilist.co/api/v2/oauth/authorize?client_id=${enc(id)}&response_type=token&state=${enc(state)}"
+                OAuthSecurity.buildAniListAuthUrl(id, state)
             }
             AccountProvider.MAL -> {
                 val verifier = randomString(64)
@@ -84,9 +133,7 @@ class AccountManager @Inject constructor(
                 // Clean up any abandoned PKCE verifiers before storing the new one.
                 secure.removeWithPrefix("acct_pkce:")
                 secure.put("acct_pkce:$state", "$now:$verifier")
-                "https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=${enc(id)}" +
-                    "&code_challenge=${enc(verifier)}&code_challenge_method=plain&state=${enc(state)}" +
-                    "&redirect_uri=${enc(p.redirectUri)}"
+                OAuthSecurity.buildMalAuthUrl(id, verifier, state, p.redirectUri)
             }
             AccountProvider.KITSU -> null
         }
@@ -101,21 +148,20 @@ class AccountManager @Inject constructor(
             when (p) {
                 AccountProvider.ANILIST -> {
                     val pending = secure.get("acct_pending:anilist")
+                    // Always consume pending state once on any callback attempt.
                     secure.remove("acct_pending:anilist")
-                    val parts = pending?.split(':', limit = 2)
-                    val issuedAt = parts?.getOrNull(0)?.toLongOrNull() ?: 0L
-                    val expectedState = parts?.getOrNull(1)
-                    if (pending == null || System.currentTimeMillis() - issuedAt !in 0..AUTH_TTL_MS) {
-                        throw ProviderException(FailureKind.AUTH, "Sign-in session expired or was not started from AniVault. Try again.")
-                    }
                     val frag = uri.fragment.orEmpty()
                     val params = frag.split('&').mapNotNull {
                         val kv = it.split('=', limit = 2)
-                        if (kv.size == 2) kv[0] to kv[1] else null
+                        if (kv.size == 2) {
+                            val k = runCatching { URLDecoder.decode(kv[0], "UTF-8") }.getOrDefault(kv[0])
+                            val v = runCatching { URLDecoder.decode(kv[1], "UTF-8") }.getOrDefault(kv[1])
+                            k to v
+                        } else null
                     }.toMap()
                     val returnedState = params["state"] ?: uri.getQueryParameter("state")
-                    if (returnedState != null && expectedState != null && returnedState != expectedState) {
-                        throw ProviderException(FailureKind.AUTH, "Sign-in response did not match this request. Try again.")
+                    if (!OAuthSecurity.verifyCallbackState(pending, returnedState, System.currentTimeMillis(), AUTH_TTL_MS)) {
+                        throw ProviderException(FailureKind.AUTH, "Sign-in response state was missing, expired, or did not match this request. Try again.")
                     }
                     val token = params["access_token"]?.takeIf { it.isNotBlank() }
                         ?: throw ProviderException(FailureKind.AUTH, "AniList did not return a sign-in token")
@@ -330,7 +376,7 @@ class AccountManager @Inject constructor(
         return buildString { repeat(len) { append(chars[rnd.nextInt(chars.length)]) } }
     }
 
-    private companion object {
+    companion object {
         const val AUTH_TTL_MS = 10 * 60_000L
         val SECRET_PREFIXES = listOf("acct_token:", "acct_refresh:", "acct_expires:", "acct_client:", "mal_client_id:")
     }

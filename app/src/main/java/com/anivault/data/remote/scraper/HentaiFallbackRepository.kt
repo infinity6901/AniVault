@@ -1,27 +1,37 @@
 package com.anivault.data.remote.scraper
 
 import com.anivault.core.Sanitizer
+import com.anivault.data.library.Franchise
 import com.anivault.data.local.dao.HVaultDao
 import com.anivault.data.local.entity.HVaultEntry
 import com.anivault.data.local.model.WatchStatus
+import com.anivault.data.provider.ProviderRepository
+import com.anivault.data.provider.ProviderResult
 import com.anivault.data.remote.model.ScrapedEntry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Named
 import javax.inject.Singleton
-import com.anivault.data.provider.ProviderRepository
-import com.anivault.data.provider.ProviderResult
+import kotlin.math.max
+import kotlin.math.min
 
 /**
- * Orchestrates H-Vault data retrieval across the configured H-Vault API sources and three
- * fallback [HentaiSource] backends:
+ * Orchestrates H-Vault data retrieval and uncensored cover resolution across:
+ *   1. **Primary Scraper**   — [HentaiScraperRepository]    (Aniyomi Hanime JSON API + fallback)
+ *   2. **Fallback Scraper 1** — [WatchHentaiScraperRepository] (Aniyomi WP-JSON / DooPlay / Multi-Theme / Multi-Mirror)
+ *   3. **Fallback Scraper 2** — [NhentaiApiRepository]        (nhentai.net JSON API)
+ *   4. **Catalog Providers**  — [ProviderRepository]          (AniList 18+, Kitsu 18+, Tenrai/MAL)
  *
- *   1. **Primary**   — [HentaiScraperRepository]    (hanime.tv)
- *   2. **Fallback 1** — [WatchHentaiScraperRepository] (watchhentai.net)
- *   3. **Fallback 2** — [NhentaiApiRepository]        (nhentai.net JSON API)
+ * When [com.anivault.core.AppPrefs.vaultScraperPriority] is enabled (default `true`), uncensored
+ * scrapers are queried **first** so H-Vault never defaults to heavily censored/blurred AniList or MAL
+ * cover images. Additionally, when [com.anivault.core.AppPrefs.vaultAutoUncensorCovers] is enabled,
+ * any catalog result or library entry moved into H-Vault with a censored catalog cover URL is
+ * automatically upgraded using the best matching uncensored cover from the scrapers.
  */
 @Singleton
 class HentaiFallbackRepository @Inject constructor(
@@ -40,46 +50,175 @@ class HentaiFallbackRepository @Inject constructor(
     fun observeByStatus(status: WatchStatus): Flow<List<HVaultEntry>> =
         hVaultDao.observeByStatus(status)
 
-    // ── Search with automatic fallback ─────────────────────────────────────
+    // ── Search with Scraper Priority & Auto-Uncensoring ────────────────────
 
     suspend fun search(query: String, page: Int = 1): SearchResult =
         withContext(Dispatchers.IO) {
             val failures = mutableListOf<String>()
             var answered = false
             var firstAnsweredSource = ""
-            // 1. The H-Vault API sources (Settings inside H-Vault): reliable APIs with uncensored covers.
-            when (val r = vaultProviders.search(query, page)) {
-                is ProviderResult.Success -> {
-                    answered = true
-                    firstAnsweredSource = r.source.name
-                    if (r.items.isNotEmpty() || !prefs.fallbackOnEmpty) {
-                        return@withContext SearchResult(r.items.map { it.toScraped("v-${r.source.id}") }, r.source.name, false)
-                    }
-                }
-                is ProviderResult.Failed -> r.failures.forEach { failures += "${it.sourceName}: ${it.kind.label}" }
-                ProviderResult.NoSources -> failures += "No H-Vault API source is enabled"
-            }
-            // 2. Scrapers, tried only when API sources failed or when fallbackOnEmpty is enabled.
             val scrapers: List<HentaiSource> = listOf(primary, fallback, nhentai)
-            for (src in scrapers) {
-                try {
-                    val results = src.search(query, page)
-                    if (!answered) firstAnsweredSource = src.sourceName
-                    answered = true
-                    if (results.isNotEmpty() || !prefs.fallbackOnEmpty) {
-                        return@withContext SearchResult(results, src.sourceName, true)
+
+            if (prefs.vaultScraperPriority) {
+                // 1. Scrapers FIRST: deliver true uncensored covers directly from Aniyomi-compatible engines.
+                for (src in scrapers) {
+                    try {
+                        val results = src.search(query, page)
+                        if (!answered) firstAnsweredSource = src.sourceName
+                        answered = true
+                        if (results.isNotEmpty() || !prefs.fallbackOnEmpty) {
+                            return@withContext SearchResult(results, src.sourceName, false)
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        failures += "${src.sourceName}: ${Sanitizer.clean(error.message, 100).ifBlank { "request failed" }}"
                     }
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    failures += "${src.sourceName}: ${Sanitizer.clean(error.message, 100).ifBlank { "request failed" }}"
+                }
+
+                // 2. Fallback to catalog API sources if all scrapers returned empty or failed.
+                when (val r = vaultProviders.search(query, page)) {
+                    is ProviderResult.Success -> {
+                        if (!answered) firstAnsweredSource = r.source.name
+                        answered = true
+                        val mapped = r.items.map { it.toScraped("v-${r.source.id}") }
+                        val enriched = if (prefs.vaultAutoUncensorCovers) enrichCatalogCovers(query, mapped) else mapped
+                        return@withContext SearchResult(enriched, r.source.name, true)
+                    }
+                    is ProviderResult.Failed -> r.failures.forEach { failures += "${it.sourceName}: ${it.kind.label}" }
+                    ProviderResult.NoSources -> failures += "No H-Vault API source is enabled"
+                }
+            } else {
+                // Legacy order: Catalog API sources first, but automatically upgrade censored covers if enabled.
+                when (val r = vaultProviders.search(query, page)) {
+                    is ProviderResult.Success -> {
+                        answered = true
+                        firstAnsweredSource = r.source.name
+                        if (r.items.isNotEmpty() || !prefs.fallbackOnEmpty) {
+                            val mapped = r.items.map { it.toScraped("v-${r.source.id}") }
+                            val enriched = if (prefs.vaultAutoUncensorCovers) enrichCatalogCovers(query, mapped) else mapped
+                            return@withContext SearchResult(enriched, r.source.name, false)
+                        }
+                    }
+                    is ProviderResult.Failed -> r.failures.forEach { failures += "${it.sourceName}: ${it.kind.label}" }
+                    ProviderResult.NoSources -> failures += "No H-Vault API source is enabled"
+                }
+
+                for (src in scrapers) {
+                    try {
+                        val results = src.search(query, page)
+                        if (!answered) firstAnsweredSource = src.sourceName
+                        answered = true
+                        if (results.isNotEmpty() || !prefs.fallbackOnEmpty) {
+                            return@withContext SearchResult(results, src.sourceName, true)
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        failures += "${src.sourceName}: ${Sanitizer.clean(error.message, 100).ifBlank { "request failed" }}"
+                    }
                 }
             }
+
             if (!answered) {
                 throw IllegalStateException("H-Vault search could not reach any source. ${failures.joinToString(" • ")}")
             }
-            SearchResult(emptyList(), firstAnsweredSource.ifBlank { scrapers.last().sourceName }, false)
+            SearchResult(emptyList(), firstAnsweredSource.ifBlank { scrapers.first().sourceName }, false)
         }
+
+    /**
+     * Replaces censored AniList/MAL/Kitsu covers in catalog search results with uncensored covers
+     * fetched from the scraper pool.
+     */
+    private suspend fun enrichCatalogCovers(query: String, items: List<ScrapedEntry>): List<ScrapedEntry> {
+        if (items.isEmpty() || items.none { UncensoredCoverMatcher.isCensoredCatalogCover(it.coverUrl) }) {
+            return items
+        }
+        val pool = fetchUncensoredCandidates(query)
+        if (pool.isEmpty()) return items
+        return items.map { item ->
+            if (!UncensoredCoverMatcher.isCensoredCatalogCover(item.coverUrl)) return@map item
+            val match = UncensoredCoverMatcher.bestMatch(item.title, emptyList(), pool)
+            if (match != null && match.coverUrl.isNotBlank()) {
+                item.copy(
+                    coverUrl = match.coverUrl,
+                    studio = item.studio ?: match.studio,
+                    isCensored = match.isCensored,
+                    tags = (item.tags + match.tags).distinct()
+                )
+            } else item
+        }
+    }
+
+    /**
+     * Queries the uncensored scrapers (`hanime.tv`, `watchhentai` multi-mirror, `nhentai`) concurrently
+     * for [title] (and its base franchise title if different) and returns deduplicated candidate
+     * entries with valid uncensored covers ranked by title similarity.
+     */
+    suspend fun fetchUncensoredCandidates(title: String): List<ScrapedEntry> = withContext(Dispatchers.IO) {
+        val cleanQuery = Franchise.cleanTitle(title).ifBlank { title }.trim()
+        if (cleanQuery.isBlank()) return@withContext emptyList()
+
+        val candidates = coroutineScope {
+            val d1 = async { runCatching { primary.search(cleanQuery, 1) }.getOrDefault(emptyList()) }
+            val d2 = async { runCatching { fallback.search(cleanQuery, 1) }.getOrDefault(emptyList()) }
+            val d3 = async { runCatching { nhentai.search(cleanQuery, 1) }.getOrDefault(emptyList()) }
+            d1.await() + d2.await() + d3.await()
+        }
+
+        candidates
+            .filter { it.coverUrl.isNotBlank() && !UncensoredCoverMatcher.isCensoredCatalogCover(it.coverUrl) }
+            .distinctBy { it.coverUrl }
+            .sortedByDescending { UncensoredCoverMatcher.similarity(title, it.title) }
+    }
+
+    /**
+     * Finds the single best matching uncensored [ScrapedEntry] for [title] / [altTitles].
+     */
+    suspend fun resolveUncensoredCover(title: String, altTitles: List<String> = emptyList()): ScrapedEntry? =
+        withContext(Dispatchers.IO) {
+            val queries = (listOf(title, Franchise.cleanTitle(title)) + altTitles)
+                .map { it.trim() }
+                .filter { it.length >= 2 }
+                .distinct()
+
+            for (q in queries.take(3)) {
+                val pool = fetchUncensoredCandidates(q)
+                val match = UncensoredCoverMatcher.bestMatch(title, altTitles, pool)
+                if (match != null) return@withContext match
+            }
+            null
+        }
+
+    /**
+     * Scans all entries currently stored in H-Vault and upgrades any blank or censored catalog covers
+     * (`s4.anilist.co`, `cdn.myanimelist.net`, `media.kitsu.io`, etc.) using the uncensored scrapers.
+     * Returns the number of entries whose cover art was upgraded.
+     */
+    suspend fun uncensorAllVaultCovers(): Int = withContext(Dispatchers.IO) {
+        val all = hVaultDao.getAll()
+        val targets = all.filter { UncensoredCoverMatcher.isCensoredCatalogCover(it.imageUrl) }
+        var upgradedCount = 0
+        val updatedEntries = mutableListOf<HVaultEntry>()
+
+        for (entry in targets) {
+            val match = runCatching { resolveUncensoredCover(entry.title) }.getOrNull()
+            if (match != null && match.coverUrl.isNotBlank() && match.coverUrl != entry.imageUrl) {
+                upgradedCount++
+                updatedEntries += entry.copy(
+                    imageUrl = match.coverUrl,
+                    studio = entry.studio?.takeIf { it.isNotBlank() } ?: match.studio,
+                    isCensored = match.isCensored,
+                    tags = if (entry.tags.isEmpty()) match.tags else (entry.tags + match.tags).distinct(),
+                    updatedAt = System.currentTimeMillis()
+                )
+            }
+        }
+        if (updatedEntries.isNotEmpty()) {
+            hVaultDao.upsertAll(updatedEntries)
+        }
+        upgradedCount
+    }
 
     // ── Detail fetch (tries all sources) ──────────────────────────────────
 
@@ -107,18 +246,33 @@ class HentaiFallbackRepository @Inject constructor(
 
     suspend fun saveToVault(entry: ScrapedEntry) = withContext(Dispatchers.IO) {
         val existing = hVaultDao.getById(entry.id)
+        var resolvedCover = entry.coverUrl
+        var resolvedStudio = entry.studio
+        var resolvedCensored = entry.isCensored
+        var resolvedTags = entry.tags
+
+        if (prefs.vaultAutoUncensorCovers && UncensoredCoverMatcher.isCensoredCatalogCover(resolvedCover)) {
+            val match = runCatching { resolveUncensoredCover(entry.title) }.getOrNull()
+            if (match != null && match.coverUrl.isNotBlank()) {
+                resolvedCover = match.coverUrl
+                resolvedStudio = resolvedStudio ?: match.studio
+                resolvedCensored = match.isCensored
+                resolvedTags = (resolvedTags + match.tags).distinct()
+            }
+        }
+
         hVaultDao.upsert(
             HVaultEntry(
                 id              = entry.id,
                 title           = entry.title,
-                imageUrl        = entry.coverUrl,
+                imageUrl        = resolvedCover,
                 totalEpisodes   = entry.episodeCount,
                 watchedEpisodes = existing?.watchedEpisodes ?: 0,
                 status          = existing?.status         ?: WatchStatus.PLAN_TO_WATCH,
                 rating          = existing?.rating         ?: 0f,
-                studio          = entry.studio,
-                isCensored      = entry.isCensored,
-                tags            = entry.tags,
+                studio          = resolvedStudio,
+                isCensored      = resolvedCensored,
+                tags            = resolvedTags,
                 notes           = existing?.notes          ?: "",
                 durationMinutes = entry.durationMinutes,
                 updatedAt       = System.currentTimeMillis()
@@ -132,7 +286,6 @@ class HentaiFallbackRepository @Inject constructor(
 
     suspend fun deleteById(id: String) = withContext(Dispatchers.IO) {
         hVaultDao.deleteById(id)
-        // Same rule as the library: deleting also removes the title from the linked accounts.
         val ids = com.anivault.data.sync.VaultOwnership.keysOfVaultId(id) + com.anivault.data.sync.VaultOwnership.keysOf(remoteOps.link(id))
         if (prefs.deleteOnAccounts) ids.forEach { k -> val (s, m) = k.split(":", limit = 2); remoteOps.enqueue(com.anivault.data.sync.RemoteOp(com.anivault.data.sync.OpType.DELETE, s, m)) }
         remoteOps.setLink(id, "")
@@ -158,6 +311,116 @@ class HentaiFallbackRepository @Inject constructor(
         val sourceName: String,
         val usedFallback: Boolean
     )
+}
+
+/**
+ * Pure, JVM-testable matcher that detects censored catalog cover URLs (AniList, MAL, Kitsu, etc.)
+ * and ranks uncensored scraper candidates against an anime's canonical and alternate titles.
+ */
+object UncensoredCoverMatcher {
+
+    private val CENSORED_CATALOG_HOSTS = listOf(
+        "anilist.co",
+        "myanimelist.net",
+        "kitsu.io",
+        "kitsu.app",
+        "shikimori.one",
+        "anidb.net",
+        "simkl.in"
+    )
+
+    private val NOISE_TOKENS = setOf(
+        "the", "animation", "ova", "ona", "special", "episode", "ep",
+        "uncensored", "censored", "hd", "subbed", "raw", "eng", "sub"
+    )
+
+    /**
+     * Returns `true` if [url] is blank or hosted on a mainstream anime catalog CDN
+     * (which blurs, crops, or censors 18+ cover art).
+     */
+    fun isCensoredCatalogCover(url: String?): Boolean {
+        val clean = url?.trim().orEmpty()
+        if (clean.isEmpty()) return true
+        val lower = clean.lowercase()
+        return CENSORED_CATALOG_HOSTS.any { host -> lower.contains(host) }
+    }
+
+    /**
+     * Normalizes an anime/hentai title for cross-site comparison by stripping punctuation,
+     * Episode/OVA suffixes, and common noise words (`The Animation`, `Uncensored`, `Episode 1`).
+     */
+    fun normalizeForMatch(title: String): String {
+        val base = Franchise.cleanTitle(title)
+            .lowercase()
+            .replace(Regex("""\b(?:episode|ep)\s*\d+\b"""), " ")
+            .replace(Regex("""[^a-z0-9\s]"""), " ")
+        val tokens = base.split(Regex("""\s+"""))
+            .filter { it.isNotBlank() && it !in NOISE_TOKENS }
+        return if (tokens.isNotEmpty()) tokens.joinToString(" ") else base.trim()
+    }
+
+    /**
+     * Computes a similarity score in `[0.0, 1.0]` combining token Jaccard overlap, prefix/containment,
+     * and character Dice coefficient.
+     */
+    fun similarity(a: String, b: String): Double {
+        val na = normalizeForMatch(a)
+        val nb = normalizeForMatch(b)
+        if (na.isEmpty() || nb.isEmpty()) return 0.0
+        if (na == nb) return 1.0
+
+        val tokensA = na.split(" ").filter { it.isNotBlank() }.toSet()
+        val tokensB = nb.split(" ").filter { it.isNotBlank() }.toSet()
+        val intersection = tokensA.intersect(tokensB).size.toDouble()
+        val union = max(1, tokensA.union(tokensB).size).toDouble()
+        val tokenScore = intersection / union
+
+        val containmentBonus = if (na.contains(nb) || nb.contains(na)) {
+            min(na.length, nb.length).toDouble() / max(na.length, nb.length).toDouble()
+        } else 0.0
+
+        val bigramsA = if (na.length >= 2) (0 until na.length - 1).map { na.substring(it, it + 2) } else listOf(na)
+        val bigramsB = if (nb.length >= 2) (0 until nb.length - 1).map { nb.substring(it, it + 2) } else listOf(nb)
+        val setA = bigramsA.toSet()
+        val setB = bigramsB.toSet()
+        val dice = (2.0 * setA.intersect(setB).size) / max(1, setA.size + setB.size)
+
+        return max(tokenScore * 0.65 + dice * 0.35, containmentBonus * 0.85 + dice * 0.15).coerceIn(0.0, 1.0)
+    }
+
+    /**
+     * Selects the best uncensored cover candidate from [candidates] matching [targetTitle] or any
+     * of [altTitles], requiring a minimum similarity threshold of `0.38` so unrelated results are never picked.
+     */
+    fun bestMatch(
+        targetTitle: String,
+        altTitles: List<String> = emptyList(),
+        candidates: List<ScrapedEntry>,
+        minScore: Double = 0.38
+    ): ScrapedEntry? {
+        val validCandidates = candidates.filter {
+            it.coverUrl.isNotBlank() && !isCensoredCatalogCover(it.coverUrl)
+        }
+        if (validCandidates.isEmpty()) return null
+
+        val allTargets = (listOf(targetTitle) + altTitles).map { it.trim() }.filter { it.isNotBlank() }
+        if (allTargets.isEmpty()) return validCandidates.first()
+
+        var bestCandidate: ScrapedEntry? = null
+        var bestScore = -1.0
+
+        for (candidate in validCandidates) {
+            val rawScore = allTargets.maxOf { t -> similarity(t, candidate.title) }
+            // Prefer uncensored entries when scores are close
+            val uncensoredBonus = if (!candidate.isCensored) 0.04 else 0.0
+            val totalScore = rawScore + uncensoredBonus
+            if (rawScore >= minScore && totalScore > bestScore) {
+                bestScore = totalScore
+                bestCandidate = candidate
+            }
+        }
+        return bestCandidate
+    }
 }
 
 internal fun com.anivault.data.provider.NormalizedAnime.toScraped(prefix: String) = ScrapedEntry(

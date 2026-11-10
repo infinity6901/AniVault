@@ -117,7 +117,7 @@ fun ApiSourcesScreen(onBack: () -> Unit, embedded: Boolean = false, vm: ApiSourc
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface))
         }
     ) { pad ->
-        Column(Modifier.padding(pad).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.padding(pad).verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 104.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             AniCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
                     SwitchRow("Auto Fallback", "If a source fails, try the next enabled source in priority order.", auto) { vm.setAuto(it) }

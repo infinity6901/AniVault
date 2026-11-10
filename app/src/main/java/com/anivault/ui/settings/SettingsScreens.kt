@@ -54,7 +54,7 @@ private fun CategoryScaffold(title: String, onBack: () -> Unit, vm: SettingsView
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface))
         }
-    ) { pad -> Column(Modifier.padding(pad).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp), content = content) }
+    ) { pad -> Column(Modifier.padding(pad).verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 104.dp), verticalArrangement = Arrangement.spacedBy(6.dp), content = content) }
 }
 
 @Composable
@@ -196,10 +196,16 @@ fun PlayerSettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewMod
     var view by remember { mutableStateOf(vm.prefs.libraryView) }
     var density by remember { mutableStateOf(vm.prefs.gridDensity) }
     var badge by remember { mutableStateOf(vm.prefs.posterBadge) }
+    var swipes by remember { mutableStateOf(vm.prefs.swipeGestures) }
     CategoryScaffold("Reader / Player", onBack, vm) {
         Note("AniVault is a tracker and catalog. Customize how your library grid, poster badges, and list swipe gestures behave here.")
         GroupLabel("Library layout")
-        ChoiceGroup(listOf("grid" to "Poster grid", "list" to "Detailed list (with swipe gestures)"), view, { view = it; vm.prefs.libraryView = it })
+        ChoiceGroup(listOf("grid" to "Poster grid", "list" to "Detailed list"), view, { view = it; vm.prefs.libraryView = it })
+        SwitchRow(
+            title = "List swipe gestures",
+            subtitle = "Deliberate horizontal swipe right for +1 episode or left to cycle watch status.",
+            checked = swipes
+        ) { swipes = it; vm.prefs.swipeGestures = it }
         GroupLabel("Poster grid density")
         ChoiceGroup(
             listOf(

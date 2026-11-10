@@ -5,9 +5,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -16,8 +16,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -131,8 +131,11 @@ class MainActivity : FragmentActivity() {
         }
         if (!data.startsWith("anivault://auth")) return
         lifecycleScope.launch {
-            accounts.handleRedirect(data)?.let { Toast.makeText(this@MainActivity, it, Toast.LENGTH_LONG).show() }
-            SyncWorker.runSoon(this@MainActivity)
+            val msg = accounts.handleRedirect(data)
+            if (msg != null) Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+            if (msg != null && msg.startsWith("Connected to ")) {
+                SyncWorker.runSoon(this@MainActivity)
+            }
         }
         i.data = null
     }
@@ -153,6 +156,7 @@ class MainActivity : FragmentActivity() {
         var catalogItem by remember { mutableStateOf<com.anivault.data.provider.NormalizedAnime?>(null) }
         val linkedId by deepLinkEntryId.collectAsStateWithLifecycle()
         val glass = LocalLiquidGlass.current
+        val floatingGlassDock = showBar && glass.enabled && glass.floatingNav
 
         LaunchedEffect(linkedId) {
             if (!linkedId.isNullOrBlank()) {
@@ -161,50 +165,12 @@ class MainActivity : FragmentActivity() {
             }
         }
 
-        Scaffold(
-            containerColor = MaterialTheme.colorScheme.background,
-            contentWindowInsets = WindowInsets(0, 0, 0, 0),
-            bottomBar = {
-                if (showBar) {
-                    if (glass.enabled && glass.floatingNav) {
-                        val dockShape = RoundedCornerShape(28.dp)
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    Brush.verticalGradient(
-                                        listOf(
-                                            Color.Transparent,
-                                            glass.tint.baseStart.copy(alpha = 0.78f),
-                                            glass.tint.baseStart.copy(alpha = 0.94f)
-                                        )
-                                    )
-                                )
-                                .navigationBarsPadding()
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                                .liquidGlassPanel(config = glass, shape = dockShape, cornerRadiusDp = 28f, elevated = true)
-                        ) {
-                            NavigationBar(
-                                containerColor = Color.Transparent,
-                                tonalElevation = 0.dp,
-                                windowInsets = WindowInsets(0, 0, 0, 0)
-                            ) {
-                                tabs.forEach { t ->
-                                    NavigationBarItem(
-                                        selected = route == t.route,
-                                        icon = { Icon(t.icon, null) },
-                                        label = { Text(t.label) },
-                                        colors = NavigationBarItemDefaults.colors(
-                                            indicatorColor = glass.tint.primary.copy(alpha = 0.24f),
-                                            selectedIconColor = glass.tint.primary,
-                                            selectedTextColor = glass.tint.primary
-                                        ),
-                                        onClick = { goTab(nav, if (t.route == R_.LIBRARY_ARG) R_.library(null) else t.route) }
-                                    )
-                                }
-                            }
-                        }
-                    } else {
+        Box(Modifier.fillMaxSize()) {
+            Scaffold(
+                containerColor = MaterialTheme.colorScheme.background,
+                contentWindowInsets = WindowInsets(0, 0, 0, 0),
+                bottomBar = {
+                    if (showBar && !floatingGlassDock) {
                         NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                             tabs.forEach { t ->
                                 NavigationBarItem(
@@ -215,45 +181,79 @@ class MainActivity : FragmentActivity() {
                         }
                     }
                 }
+            ) { pad ->
+                NavHost(nav, startDestination = R_.HOME, modifier = Modifier.padding(pad)) {
+                    composable(R_.HOME) {
+                        HomeScreen(
+                            onOpenLibrary = { s -> goTab(nav, R_.library(s)) },
+                            onOpenDiscover = { goTab(nav, R_.DISCOVER) },
+                            onOpenStats = { nav.navigate(R_.STATS) },
+                            onOpenCalendar = { nav.navigate(R_.CALENDAR) },
+                            onOpenEntry = { detailId = it },
+                            onOpenCatalog = { catalogItem = it }
+                        )
+                    }
+                    composable(R_.LIBRARY_ARG, arguments = listOf(navArgument("status") { type = NavType.StringType; defaultValue = "ALL" })) {
+                        LibraryScreen(onOpenEntry = { detailId = it })
+                    }
+                    composable(R_.DISCOVER) { DiscoverScreen(onOpenSources = { nav.navigate(R_.API) }) }
+                    composable(R_.STATS) { StatsScreen(onBack = { nav.popBackStack() }) }
+                    composable(R_.CALENDAR) {
+                        CalendarScreen(
+                            onBack = { nav.popBackStack() },
+                            onOpenEntry = { detailId = it },
+                            onOpenCatalog = { catalogItem = it }
+                        )
+                    }
+                    composable(R_.SETTINGS) { SettingsHomeScreen(onOpen = { nav.navigate("settings/$it") }) }
+                    composable(R_.API) { ApiSourcesScreen(onBack = { nav.navigateUp() }) }
+                    composable(R_.VAULT) { VaultScreen(onBack = { nav.popBackStack() }) }
+                    composable(R_.CATEGORY) { be ->
+                        val back = { nav.popBackStack(); Unit }
+                        when (be.arguments?.getString("category")) {
+                            "account" -> AccountScreen(back)
+                            "library" -> LibrarySettingsScreen(back)
+                            "player" -> PlayerSettingsScreen(back)
+                            "backup" -> BackupScreen(back)
+                            "vault" -> VaultSettingsScreen(back, onOpenVault = { nav.navigate(R_.VAULT) })
+                            "appearance" -> AppearanceScreen(back)
+                            "debuglog" -> if (BuildConfig.DEBUG) com.anivault.ui.settings.DebugLogScreen(back) else AdvancedScreen(back)
+                            else -> AdvancedScreen(back)
+                        }
+                    }
+                }
             }
-        ) { pad ->
-            NavHost(nav, startDestination = R_.HOME, modifier = Modifier.padding(pad)) {
-                composable(R_.HOME) {
-                    HomeScreen(
-                        onOpenLibrary = { s -> goTab(nav, R_.library(s)) },
-                        onOpenDiscover = { goTab(nav, R_.DISCOVER) },
-                        onOpenStats = { nav.navigate(R_.STATS) },
-                        onOpenCalendar = { nav.navigate(R_.CALENDAR) },
-                        onOpenEntry = { detailId = it },
-                        onOpenCatalog = { catalogItem = it }
-                    )
-                }
-                composable(R_.LIBRARY_ARG, arguments = listOf(navArgument("status") { type = NavType.StringType; defaultValue = "ALL" })) {
-                    LibraryScreen(onOpenEntry = { detailId = it })
-                }
-                composable(R_.DISCOVER) { DiscoverScreen(onOpenSources = { nav.navigate(R_.API) }) }
-                composable(R_.STATS) { StatsScreen(onBack = { nav.popBackStack() }) }
-                composable(R_.CALENDAR) {
-                    CalendarScreen(
-                        onBack = { nav.popBackStack() },
-                        onOpenEntry = { detailId = it },
-                        onOpenCatalog = { catalogItem = it }
-                    )
-                }
-                composable(R_.SETTINGS) { SettingsHomeScreen(onOpen = { nav.navigate("settings/$it") }) }
-                composable(R_.API) { ApiSourcesScreen(onBack = { nav.navigateUp() }) }
-                composable(R_.VAULT) { VaultScreen(onBack = { nav.popBackStack() }) }
-                composable(R_.CATEGORY) { be ->
-                    val back = { nav.popBackStack(); Unit }
-                    when (be.arguments?.getString("category")) {
-                        "account" -> AccountScreen(back)
-                        "library" -> LibrarySettingsScreen(back)
-                        "player" -> PlayerSettingsScreen(back)
-                        "backup" -> BackupScreen(back)
-                        "vault" -> VaultSettingsScreen(back, onOpenVault = { nav.navigate(R_.VAULT) })
-                        "appearance" -> AppearanceScreen(back)
-                        "debuglog" -> if (BuildConfig.DEBUG) com.anivault.ui.settings.DebugLogScreen(back) else AdvancedScreen(back)
-                        else -> AdvancedScreen(back)
+
+            // True floating Liquid Glass capsule dock: sits directly over the edge-to-edge scrolling content
+            // with zero solid bar or dead space underneath!
+            if (floatingGlassDock) {
+                val dockShape = RoundedCornerShape(28.dp)
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .liquidGlassPanel(config = glass, shape = dockShape, cornerRadiusDp = 28f, elevated = true)
+                ) {
+                    NavigationBar(
+                        containerColor = Color.Transparent,
+                        tonalElevation = 0.dp,
+                        windowInsets = WindowInsets(0, 0, 0, 0)
+                    ) {
+                        tabs.forEach { t ->
+                            NavigationBarItem(
+                                selected = route == t.route,
+                                icon = { Icon(t.icon, null) },
+                                label = { Text(t.label) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    indicatorColor = glass.tint.primary.copy(alpha = 0.24f),
+                                    selectedIconColor = glass.tint.primary,
+                                    selectedTextColor = glass.tint.primary
+                                ),
+                                onClick = { goTab(nav, if (t.route == R_.LIBRARY_ARG) R_.library(null) else t.route) }
+                            )
+                        }
                     }
                 }
             }

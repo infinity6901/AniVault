@@ -4,6 +4,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Dns
+import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -17,6 +18,40 @@ import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+/**
+ * Pure, JVM-testable redirect origin guard:
+ *  1. Rejects non-HTTPS or private/loopback/LAN redirect hops.
+ *  2. Strips sensitive headers (`Authorization`, `X-MAL-CLIENT-ID`, `Cookie`) whenever a redirect
+ *     crosses to a different origin (scheme, host, or port).
+ *
+ * Installed as a **network interceptor** so it inspects every HTTP hop after `RetryAndFollowUpInterceptor`.
+ */
+object RedirectOriginGuard {
+    fun sameOrigin(a: HttpUrl, b: HttpUrl): Boolean =
+        a.scheme.equals(b.scheme, ignoreCase = true) &&
+            a.host.equals(b.host, ignoreCase = true) &&
+            a.port == b.port
+
+    fun validateAndSanitizeHop(initialUrl: HttpUrl, currentRequest: Request): Request {
+        val url = currentRequest.url
+        if (!url.scheme.equals("https", ignoreCase = true)) {
+            throw IOException("Blocked non-HTTPS request or redirect")
+        }
+        if (SourceValidator.isPrivateHost(url.host)) {
+            throw UnknownHostException("Blocked a private network address")
+        }
+        return if (!sameOrigin(initialUrl, url)) {
+            currentRequest.newBuilder()
+                .removeHeader("Authorization")
+                .removeHeader("X-MAL-CLIENT-ID")
+                .removeHeader("Cookie")
+                .build()
+        } else {
+            currentRequest
+        }
+    }
+}
 
 /**
  * Production [HttpTransport]. Cancelling the calling coroutine cancels the HTTP call (so stale
@@ -44,23 +79,19 @@ class OkHttpTransport(
         ) {
             builder.method(request.method.uppercase(), (request.body ?: "").toRequestBody(request.contentType.toMediaType()))
         } else if (request.method.equals("DELETE", ignoreCase = true)) {
-            // Previously fell through to GET, so account deletes were sent as reads (MAL answered 405).
             builder.delete()
         } else {
             builder.get()
         }
         val secs = timeoutSeconds().coerceIn(5, 60)
         val builtRequest = builder.build()
-        val initialHost = builtRequest.url.host
+        val initialUrl = builtRequest.url
         val call = client.newBuilder()
             .connectTimeout(secs.toLong(), TimeUnit.SECONDS)
             .readTimeout(secs.toLong(), TimeUnit.SECONDS)
             .callTimeout((secs + 5).toLong(), TimeUnit.SECONDS)
-            .addInterceptor { chain ->
-                val req = chain.request()
-                val sanitized = if (!req.url.host.equals(initialHost, ignoreCase = true)) {
-                    req.newBuilder().removeHeader("Authorization").removeHeader("X-MAL-CLIENT-ID").build()
-                } else req
+            .addNetworkInterceptor { chain ->
+                val sanitized = RedirectOriginGuard.validateAndSanitizeHop(initialUrl, chain.request())
                 chain.proceed(sanitized)
             }
             .build()
@@ -115,12 +146,12 @@ class OkHttpTransport(
 
     private companion object {
         const val MAX_BODY_BYTES = 8L * 1024 * 1024
-        const val USER_AGENT = "AniVault/1.2 (Android)"
+        const val USER_AGENT = "AniVault/1.3 (Android)"
     }
 }
 
-/** Rejects redirects to plain HTTP or private/local hosts before sending the redirected request. */
-private object RedirectGuardInterceptor : Interceptor {
+/** Rejects requests or redirects to plain HTTP or private/local hosts at the network interceptor layer. */
+object RedirectGuardInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val req = chain.request()
         if (!req.url.scheme.equals("https", ignoreCase = true)) {
@@ -135,7 +166,7 @@ private object RedirectGuardInterceptor : Interceptor {
 
 /**
  * Blocks DNS answers that resolve to loopback / private / link-local / CGNAT / unique-local addresses
- * (including IPv4-mapped IPv6 addresses) so a configured source can't be pointed at the user's local network.
+ * (including IPv4-mapped IPv6 addresses) so a configured source or cover URL can't be pointed at the user's local network.
  */
 object SafeDns : Dns {
     override fun lookup(hostname: String): List<InetAddress> {

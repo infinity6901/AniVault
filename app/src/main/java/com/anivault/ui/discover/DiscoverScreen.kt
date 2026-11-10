@@ -285,7 +285,7 @@ fun DiscoverScreen(onOpenSources: () -> Unit, viewModel: DiscoverViewModel = hil
                     "Couldn't reach your sources", viewModel::retry,
                     detail = st.failures.joinToString("\n") { "${it.sourceName}: ${it.kind.label}" }
                 )
-                DiscoverStatus.Content -> LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                DiscoverStatus.Content -> LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 104.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item(key = "header") { header() }
                     items(sortedItems, key = { it.canonicalId }) { a -> Box(Modifier.padding(horizontal = 16.dp)) { ResultRow(a, a.canonicalId in ui.inLibrary) { detail = a } } }
                     if (ui.loadingMore) item { LoadingBox() }

@@ -11,6 +11,12 @@ import com.anivault.data.local.entity.AnimeEntry
 import com.anivault.data.local.entity.RemoteIds
 import com.anivault.data.local.model.WatchStatus
 import com.anivault.data.provider.AiringFormat
+import com.anivault.data.provider.RedirectOriginGuard
+import com.anivault.data.remote.model.ScrapedEntry
+import com.anivault.data.remote.scraper.AniyomiAdaptiveParser
+import com.anivault.data.remote.scraper.HanimeAniyomiCodec
+import com.anivault.data.remote.scraper.UncensoredCoverMatcher
+import com.anivault.data.sync.OAuthSecurity
 import com.anivault.ui.common.CoverPalette
 import com.anivault.ui.common.CoverUrls
 import com.anivault.ui.common.Tags
@@ -20,7 +26,10 @@ import com.anivault.ui.theme.LiquidGlassTint
 import com.anivault.ui.theme.Palette
 import com.anivault.widget.AiringWidgetText
 import com.anivault.widget.WidgetRules
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Request
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -89,12 +98,20 @@ class NewFeatureTests {
         assertEquals(k, Franchise.key("Frieren Part 2"))
         assertTrue(Franchise.key("Mob Psycho 100") != Franchise.key("Mob Psycho"))
         assertEquals("86", Franchise.key("86"))
+        assertEquals("The Apothecary Diaries", Franchise.cleanTitle("The Apothecary Diaries Season 3"))
+        assertEquals("Cyberpunk: Edgerunners", Franchise.cleanTitle("Cyberpunk: Edgerunners 2"))
     }
 
     @Test fun franchiseGroupsKeepOrder() {
-        val a = AnimeEntry(id = "1", title = "Show Season 2"); val b = AnimeEntry(id = "2", title = "Other"); val c = AnimeEntry(id = "3", title = "Show")
+        val a = AnimeEntry(id = "1", title = "Show Season 2", totalEpisodes = 12, watchedEpisodes = 4)
+        val b = AnimeEntry(id = "2", title = "Other")
+        val c = AnimeEntry(id = "3", title = "Show", totalEpisodes = 12, watchedEpisodes = 12, status = WatchStatus.COMPLETED)
         val g = Franchise.group(listOf(a, b, c))
-        assertEquals(2, g.size); assertEquals(listOf("1", "3"), g[0].members.map { it.id })
+        assertEquals(2, g.size)
+        assertEquals(listOf("1", "3"), g[0].members.map { it.id })
+        assertEquals("Show", g[0].displayTitle)
+        assertEquals(24, g[0].totalEpisodes)
+        assertEquals(16, g[0].watchedEpisodes)
     }
 
     @Test fun coverUpgrades() {
@@ -197,5 +214,147 @@ class NewFeatureTests {
         val cfg = LiquidGlassConfig(enabled = true, tint = LiquidGlassTint.CRYSTAL, opacityPct = 30, specularPct = 80)
         assertEquals(0.30f, cfg.panelAlpha, 0.001f)
         assertEquals(0.80f, cfg.specularIntensity, 0.001f)
+    }
+
+    @Test fun oauthStateRequiresPresentMatchingAndFreshValue() {
+        val pending = "1000:abcXYZ123"
+        // Valid matching state within TTL
+        assertTrue(OAuthSecurity.verifyCallbackState(pending, "abcXYZ123", nowMs = 5000L, ttlMs = 60_000L))
+        // Missing returned state MUST fail (Finding 1)
+        assertFalse(OAuthSecurity.verifyCallbackState(pending, null, nowMs = 5000L, ttlMs = 60_000L))
+        assertFalse(OAuthSecurity.verifyCallbackState(pending, "", nowMs = 5000L, ttlMs = 60_000L))
+        // Wrong state MUST fail
+        assertFalse(OAuthSecurity.verifyCallbackState(pending, "wrongState", nowMs = 5000L, ttlMs = 60_000L))
+        // Expired state MUST fail
+        assertFalse(OAuthSecurity.verifyCallbackState(pending, "abcXYZ123", nowMs = 99_000L, ttlMs = 60_000L))
+        // Missing pending record MUST fail
+        assertFalse(OAuthSecurity.verifyCallbackState(null, "abcXYZ123", nowMs = 5000L, ttlMs = 60_000L))
+    }
+
+    @Test fun malPkceUsesS256AndNeverLeaksVerifierInUrl() {
+        // RFC 7636 Appendix B test vector
+        val verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+        val expectedChallenge = "E9Melhoa2OwvFrKbTJguCHaoeK1t8URWbuGJSstw-cM"
+        assertEquals(expectedChallenge, OAuthSecurity.pkceS256Challenge(verifier))
+
+        val url = OAuthSecurity.buildMalAuthUrl("client123", verifier, "state999", "anivault://auth/mal")
+        assertTrue(url.contains("code_challenge_method=S256"))
+        assertTrue(url.contains("code_challenge=$expectedChallenge"))
+        assertFalse(url.contains(verifier))
+    }
+
+    @Test fun redirectOriginGuardStripsCredentialsOnCrossOriginHop() {
+        val initial = "https://api.myanimelist.net/v2/anime".toHttpUrl()
+        val sameOriginReq = Request.Builder()
+            .url("https://api.myanimelist.net/v2/users/@me/animelist")
+            .header("Authorization", "Bearer secret")
+            .header("X-MAL-CLIENT-ID", "client-secret")
+            .build()
+        val kept = RedirectOriginGuard.validateAndSanitizeHop(initial, sameOriginReq)
+        assertEquals("Bearer secret", kept.header("Authorization"))
+        assertEquals("client-secret", kept.header("X-MAL-CLIENT-ID"))
+
+        val crossOriginReq = Request.Builder()
+            .url("https://cdn.example.org/redirected")
+            .header("Authorization", "Bearer secret")
+            .header("X-MAL-CLIENT-ID", "client-secret")
+            .header("Cookie", "sid=123")
+            .build()
+        val stripped = RedirectOriginGuard.validateAndSanitizeHop(initial, crossOriginReq)
+        assertNull(stripped.header("Authorization"))
+        assertNull(stripped.header("X-MAL-CLIENT-ID"))
+        assertNull(stripped.header("Cookie"))
+    }
+
+    @Test fun hanimeAniyomiCodecParsesHitsAndDetailJson() {
+        val searchJson = """
+            {
+              "hits": "[{\"slug\":\"overflow-1\",\"name\":\"Overflow Episode 1\",\"cover_url\":\"https://static-assets.highwinds-cdn.com/posters/overflow-1.jpg\",\"brand\":\"Studio Hokiboshi\",\"is_censored\":false,\"tags\":[\"Romance\",\"Uncensored\"],\"duration_in_ms\":480000}]"
+            }
+        """.trimIndent()
+        val parsed = HanimeAniyomiCodec.parseSearchJson(searchJson)
+        assertEquals(1, parsed.size)
+        assertEquals("hanime:overflow-1", parsed[0].id)
+        assertEquals("Overflow Episode 1", parsed[0].title)
+        assertEquals("https://static-assets.highwinds-cdn.com/posters/overflow-1.jpg", parsed[0].coverUrl)
+        assertEquals("Studio Hokiboshi", parsed[0].studio)
+        assertFalse(parsed[0].isCensored)
+        assertEquals(8, parsed[0].durationMinutes)
+    }
+
+    @Test fun aniyomiAdaptiveParserHandlesWpJsonDooPlayAndThumbUpgrades() {
+        assertEquals(
+            "https://watchhentai.net/wp-content/uploads/2025/04/cover.jpg",
+            AniyomiAdaptiveParser.upgradeWordPressCoverUrl("https://watchhentai.net/wp-content/uploads/2025/04/cover-185x278.jpg")
+        )
+
+        val wpJson = """
+            [
+              {
+                "slug": "isekai-harem-monogatari",
+                "link": "https://watchhentai.net/series/isekai-harem-monogatari/",
+                "title": { "rendered": "Isekai Harem Monogatari &#8211; Watch Hentai" },
+                "_embedded": {
+                  "wp:featuredmedia": [
+                    { "source_url": "https://watchhentai.net/wp-content/uploads/2024/01/isekai-300x420.jpg" }
+                  ]
+                }
+              }
+            ]
+        """.trimIndent()
+        val wpParsed = AniyomiAdaptiveParser.parseWpJsonPosts(wpJson)
+        assertEquals(1, wpParsed.size)
+        assertEquals("Isekai Harem Monogatari", wpParsed[0].title)
+        assertEquals("https://watchhentai.net/wp-content/uploads/2024/01/isekai.jpg", wpParsed[0].coverUrl)
+
+        val dooPlayJson = """
+            {
+              "901": {
+                "title": "Succubus Stayed Life",
+                "url": "https://watchhentai.net/videos/succubus-stayed-life/",
+                "img": "https://watchhentai.net/wp-content/uploads/succubus-150x150.png"
+              }
+            }
+        """.trimIndent()
+        val dpParsed = AniyomiAdaptiveParser.parseDooPlaySearchJson(dooPlayJson)
+        assertEquals(1, dpParsed.size)
+        assertEquals("Succubus Stayed Life", dpParsed[0].title)
+        assertEquals("https://watchhentai.net/wp-content/uploads/succubus.png", dpParsed[0].coverUrl)
+    }
+
+    @Test fun uncensoredCoverMatcherDetectsCatalogCensorshipAndFindsBestScraperCover() {
+        assertTrue(UncensoredCoverMatcher.isCensoredCatalogCover("https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx123.jpg"))
+        assertTrue(UncensoredCoverMatcher.isCensoredCatalogCover("https://cdn.myanimelist.net/images/anime/10/999l.jpg"))
+        assertTrue(UncensoredCoverMatcher.isCensoredCatalogCover("https://media.kitsu.io/anime/poster_images/1/large.jpg"))
+        assertFalse(UncensoredCoverMatcher.isCensoredCatalogCover("https://static-assets.highwinds-cdn.com/posters/overflow.jpg"))
+        assertFalse(UncensoredCoverMatcher.isCensoredCatalogCover("https://watchhentai.net/wp-content/uploads/overflow.jpg"))
+
+        val candidates = listOf(
+            ScrapedEntry(
+                id = "hanime:unrelated",
+                title = "Completely Different Show",
+                coverUrl = "https://static-assets.highwinds-cdn.com/posters/other.jpg",
+                tags = emptyList(),
+                studio = null,
+                isCensored = false,
+                episodeCount = 1,
+                durationMinutes = 20,
+                detailUrl = "https://hanime.tv/videos/hentai/other"
+            ),
+            ScrapedEntry(
+                id = "hanime:overflow-1",
+                title = "Overflow The Animation Episode 1 (Uncensored)",
+                coverUrl = "https://static-assets.highwinds-cdn.com/posters/overflow.jpg",
+                tags = listOf("Uncensored"),
+                studio = "Studio Hokiboshi",
+                isCensored = false,
+                episodeCount = 8,
+                durationMinutes = 8,
+                detailUrl = "https://hanime.tv/videos/hentai/overflow-1"
+            )
+        )
+        val match = UncensoredCoverMatcher.bestMatch("Overflow", emptyList(), candidates)
+        assertNotNull(match)
+        assertEquals("https://static-assets.highwinds-cdn.com/posters/overflow.jpg", match?.coverUrl)
     }
 }

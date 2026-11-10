@@ -38,11 +38,25 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val envStore = System.getenv("RELEASE_STORE_FILE")?.takeIf { it.isNotBlank() }?.let { file(it) }
+            val ciStore = System.getenv("ANDROID_USER_HOME")?.takeIf { it.isNotBlank() }?.let { file("$it/debug.keystore") }
+            val resolvedStore = when {
+                envStore != null && envStore.exists() -> envStore
+                ciStore != null && ciStore.exists() -> ciStore
+                else -> signingConfigs.getByName("debug").storeFile
+            }
+            storeFile = resolvedStore
+            storePassword = System.getenv("RELEASE_STORE_PASSWORD") ?: "android"
+            keyAlias = System.getenv("RELEASE_KEY_ALIAS") ?: "androiddebugkey"
+            keyPassword = System.getenv("RELEASE_KEY_PASSWORD") ?: "android"
+        }
+    }
+
     buildTypes {
         release {
-            // FOSS/direct-distribution builds are signed with Android's generated debug key.
-            // This is not suitable for Play Store publication or secure long-term updates.
-            signingConfig      = signingConfigs.getByName("debug")
+            signingConfig     = signingConfigs.getByName("release")
             isMinifyEnabled   = true
             isShrinkResources = true
             proguardFiles(

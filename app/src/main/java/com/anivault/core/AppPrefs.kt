@@ -114,6 +114,10 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
     var posterBadge: String
         get() = sp.getString(K_POSTER_BADGE, "rating") ?: "rating"
         set(v) = putString(K_POSTER_BADGE, v)
+    /** Enable horizontal swipe actions (+1 ep / cycle status) in list mode. */
+    var swipeGestures: Boolean
+        get() = sp.getBoolean(K_SWIPE_GESTURES, true)
+        set(v) = putBool(K_SWIPE_GESTURES, v)
     /** JSON array of pinned smart lists in LibraryScreen. */
     var savedSmartLists: String
         get() = sp.getString(K_SMART_LISTS, "") ?: ""
@@ -121,12 +125,24 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
 
     // ── H-Vault ────────────────────────────────────────────────────────────
     var vaultAutoLock: Boolean
-        get() = sp.getBoolean(K_VAULT_AUTOLOCK, true)
-        set(v) = putBool(K_VAULT_AUTOLOCK, v)
+        get() = sp.getBoolean(K_VAULT_AUTOLOCK, K_VAULT_SCRAPER_PRIORITY, K_VAULT_AUTO_UNCENSOR, true)
+        set(v) = putBool(K_VAULT_AUTOLOCK, K_VAULT_SCRAPER_PRIORITY, K_VAULT_AUTO_UNCENSOR, v)
     /** Seconds the app may stay in the background before the vault re-locks (0 = immediately). */
     var vaultLockTimeoutSec: Int
         get() = sp.getInt(K_VAULT_TIMEOUT, 0)
         set(v) = putInt(K_VAULT_TIMEOUT, v)
+    /** Query uncensored scrapers (Hanime API, WatchHentai/DooPlay, Nhentai) BEFORE censored API catalogs (AniList/MAL). */
+    var vaultScraperPriority: Boolean
+        get() = sp.getBoolean(K_VAULT_SCRAPER_PRIORITY, true)
+        set(v) = putBool(K_VAULT_SCRAPER_PRIORITY, v)
+    /** Automatically replace censored AniList/MAL/Kitsu covers with uncensored scraper covers when moving or searching in H-Vault. */
+    var vaultAutoUncensorCovers: Boolean
+        get() = sp.getBoolean(K_VAULT_AUTO_UNCENSOR, true)
+        set(v) = putBool(K_VAULT_AUTO_UNCENSOR, v)
+    /** Optional comma/newline-separated custom Aniyomi-compatible WordPress/DooPlay/Madara mirror base URLs. */
+    var vaultCustomMirrors: String
+        get() = sp.getString(K_VAULT_MIRRORS, "") ?: ""
+        set(v) = putString(K_VAULT_MIRRORS, v)
 
     // ── Network / providers ────────────────────────────────────────────────
     var networkTimeoutSec: Int
@@ -203,9 +219,13 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         const val K_LIB_SORT = "library_sort"
         const val K_GRID_DENSITY = "grid_density"
         const val K_POSTER_BADGE = "poster_badge"
+        const val K_SWIPE_GESTURES = "swipe_gestures"
         const val K_SMART_LISTS = "saved_smart_lists"
         const val K_VAULT_AUTOLOCK = "vault_auto_lock"
         const val K_VAULT_TIMEOUT = "vault_lock_timeout_s"
+        const val K_VAULT_SCRAPER_PRIORITY = "vault_scraper_priority"
+        const val K_VAULT_AUTO_UNCENSOR = "vault_auto_uncensor_covers"
+        const val K_VAULT_MIRRORS = "vault_custom_mirrors"
         const val K_NET_TIMEOUT = "net_timeout_s"
         const val K_NET_RETRIES = "net_retries"
         const val K_FALLBACK_EMPTY = "fallback_on_empty"
@@ -225,14 +245,14 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
             K_GLASS_TINT, K_GLASS_OPACITY, K_GLASS_SPECULAR, K_GLASS_BLUR, K_GLASS_ANIMATED, K_GLASS_FLOATING_NAV,
             K_WIDGET_GLASS, K_WIDGET_GLASS_OPACITY, K_WIDGET_GLASS_COVER,
             K_CONFIRM_DELETE, K_DEFAULT_STATUS, K_AUTO_COMPLETE, K_PLUS_ONE,
-            K_SYNOPSIS, K_LIB_VIEW, K_LIB_SORT, K_GRID_DENSITY, K_POSTER_BADGE, K_SMART_LISTS,
+            K_SYNOPSIS, K_LIB_VIEW, K_LIB_SORT, K_GRID_DENSITY, K_POSTER_BADGE, K_SWIPE_GESTURES, K_SMART_LISTS, K_VAULT_SCRAPER_PRIORITY, K_VAULT_AUTO_UNCENSOR, K_VAULT_MIRRORS,
             K_NET_TIMEOUT, K_NET_RETRIES, K_FALLBACK_EMPTY,
             K_CONFLICT, K_DELETE_REMOTE, K_MARK_VAULT, K_QUIET_START, K_QUIET_END
         )
 
         val BOOL_KEYS = setOf(
             K_DYNAMIC, K_GLASS_ANIMATED, K_GLASS_FLOATING_NAV, K_WIDGET_GLASS, K_WIDGET_GLASS_COVER,
-            K_CONFIRM_DELETE, K_AUTO_COMPLETE, K_PLUS_ONE, K_SYNOPSIS, K_VAULT_AUTOLOCK,
+            K_CONFIRM_DELETE, K_SWIPE_GESTURES, K_AUTO_COMPLETE, K_PLUS_ONE, K_SYNOPSIS, K_VAULT_AUTOLOCK, K_VAULT_SCRAPER_PRIORITY, K_VAULT_AUTO_UNCENSOR,
             K_FALLBACK_EMPTY, K_DELETE_REMOTE, K_MARK_VAULT, K_NOTIF, K_NOTIF_REMINDERS, K_NOTIF_AIRING, K_NOTIF_SYNC
         )
 

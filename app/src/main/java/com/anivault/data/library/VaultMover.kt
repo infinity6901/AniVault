@@ -8,6 +8,8 @@ import com.anivault.data.local.entity.AnimeEntry
 import com.anivault.data.local.entity.HVaultEntry
 import com.anivault.data.local.entity.RemoteIds
 import com.anivault.data.local.model.WatchStatus
+import com.anivault.data.remote.scraper.HentaiFallbackRepository
+import com.anivault.data.remote.scraper.UncensoredCoverMatcher
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -46,7 +48,7 @@ object VaultMapping {
         if (stashed != null) {
             return stashed.copy(
                 title = v.title.ifBlank { stashed.title },
-                imageUrl = v.imageUrl.ifBlank { stashed.imageUrl },
+                imageUrl = stashed.imageUrl.ifBlank { v.imageUrl },
                 totalEpisodes = if (v.totalEpisodes > 0) v.totalEpisodes else stashed.totalEpisodes,
                 watchedEpisodes = v.watchedEpisodes,
                 status = v.status,
@@ -114,15 +116,35 @@ class VaultMover @Inject constructor(
     private val animeDao: AnimeDao,
     private val vaultDao: HVaultDao,
     private val remoteOps: com.anivault.data.sync.RemoteOps,
-    private val prefs: com.anivault.core.AppPrefs
+    private val prefs: com.anivault.core.AppPrefs,
+    private val vaultScraperRepo: HentaiFallbackRepository
 ) {
-    /** Moves library rows into H-Vault. Returns how many moved. */
+    /**
+     * Moves library rows into H-Vault and automatically upgrades censored AniList/MAL/Kitsu cover URLs
+     * to uncensored scraper covers when [com.anivault.core.AppPrefs.vaultAutoUncensorCovers] is enabled.
+     */
     suspend fun toVault(ids: List<String>): Int {
         val now = System.currentTimeMillis()
         val rows = ids.mapNotNull { animeDao.getById(it) }
         if (rows.isEmpty()) return 0
+
+        val vaultRows = rows.map { e ->
+            val base = VaultMapping.toVault(e, now)
+            if (prefs.vaultAutoUncensorCovers && UncensoredCoverMatcher.isCensoredCatalogCover(base.imageUrl)) {
+                val match = runCatching { vaultScraperRepo.resolveUncensoredCover(e.title, e.altTitles) }.getOrNull()
+                if (match != null && match.coverUrl.isNotBlank()) {
+                    base.copy(
+                        imageUrl = match.coverUrl,
+                        studio = match.studio ?: base.studio,
+                        isCensored = match.isCensored,
+                        tags = (base.tags + match.tags).distinct()
+                    )
+                } else base
+            } else base
+        }
+
         db.withTransaction {
-            vaultDao.upsertAll(rows.map { VaultMapping.toVault(it, now) })
+            vaultDao.upsertAll(vaultRows)
             animeDao.deleteByIds(rows.map { it.id })
         }
         // Remember every account link and original metadata so moving back loses nothing.

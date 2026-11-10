@@ -41,6 +41,12 @@ object BackupCodec {
     private const val SALT = 16
     private const val NONCE = 12
     const val MIN_PASSWORD = 8
+    private const val MAX_ID_LEN = 256
+    private const val MAX_TITLE_LEN = 512
+    private const val MAX_URL_LEN = 2048
+    private const val MAX_NOTES_LEN = 16_384
+    private const val MAX_LIST_ITEMS = 64
+    private const val MAX_ENTRIES = 50_000
     /** PBKDF2 work factor. Fixed for the format; only tests lower it. */
     internal var iterations = 210_000
 
@@ -79,60 +85,63 @@ object BackupCodec {
             throw BackupException("The backup could not be read.")
         } ?: throw BackupException("The backup is empty.")
         if (payload.version > 2) throw BackupException("This backup was made by a newer AniVault. Update the app first.")
-        // Gson bypasses Kotlin null-safety, so sanitize every deserialized entity and collection.
+        // Gson bypasses Kotlin null-safety, so sanitize and bound every deserialized entity and collection.
         val rows: List<AnimeEntry>? = payload.anime
         val vaultRows: List<HVaultEntry>? = payload.hvault
         return payload.copy(
-            anime = (rows ?: emptyList()).mapNotNull(::sanitizeAnime).distinctBy { it.id },
-            hvault = vaultRows?.mapNotNull(::sanitizeVault)?.distinctBy { it.id }
+            anime = (rows ?: emptyList()).take(MAX_ENTRIES).mapNotNull(::sanitizeAnime).distinctBy { it.id },
+            hvault = vaultRows?.take(MAX_ENTRIES)?.mapNotNull(::sanitizeVault)?.distinctBy { it.id }
         )
     }
 
     @Suppress("UselessCallOnNotNull")
     private fun sanitizeAnime(e: AnimeEntry?): AnimeEntry? {
         if (e == null || e.id.isNullOrBlank() || e.title.isNullOrBlank()) return null
-        val total = e.totalEpisodes.coerceAtLeast(0)
-        val watched = if (total > 0) e.watchedEpisodes.coerceIn(0, total) else e.watchedEpisodes.coerceAtLeast(0)
+        val total = e.totalEpisodes.coerceIn(0, 50_000)
+        val watched = if (total > 0) e.watchedEpisodes.coerceIn(0, total) else e.watchedEpisodes.coerceIn(0, 50_000)
         return e.copy(
-            id = e.id.trim(),
-            title = e.title.trim(),
-            imageUrl = e.imageUrl.orEmpty(),
+            id = e.id.trim().take(MAX_ID_LEN),
+            title = e.title.trim().take(MAX_TITLE_LEN),
+            imageUrl = e.imageUrl.orEmpty().trim().take(MAX_URL_LEN),
             totalEpisodes = total,
             watchedEpisodes = watched,
             status = (e.status as WatchStatus?) ?: WatchStatus.PLAN_TO_WATCH,
             rating = if (e.rating.isNaN()) 0f else e.rating.coerceIn(0f, 10f),
-            season = e.season.orEmpty(),
-            genres = (e.genres as List<String?>?)?.mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) } ?: emptyList(),
-            synopsis = e.synopsis.orEmpty(),
-            notes = e.notes.orEmpty(),
-            durationMinutes = e.durationMinutes.coerceAtLeast(0),
-            bannerUrl = e.bannerUrl.orEmpty(),
-            altTitles = (e.altTitles as List<String?>?)?.mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) } ?: emptyList(),
-            format = e.format.orEmpty(),
-            airingStatus = e.airingStatus.orEmpty(),
-            sourceName = e.sourceName.orEmpty(),
-            remoteIds = e.remoteIds.orEmpty(),
+            season = e.season.orEmpty().take(32),
+            genres = (e.genres as List<String?>?)?.mapNotNull { it?.trim()?.take(64)?.takeIf(String::isNotEmpty) }?.take(MAX_LIST_ITEMS) ?: emptyList(),
+            synopsis = e.synopsis.orEmpty().take(MAX_NOTES_LEN),
+            notes = e.notes.orEmpty().take(MAX_NOTES_LEN),
+            durationMinutes = e.durationMinutes.coerceIn(0, 1_440),
+            bannerUrl = e.bannerUrl.orEmpty().trim().take(MAX_URL_LEN),
+            altTitles = (e.altTitles as List<String?>?)?.mapNotNull { it?.trim()?.take(MAX_TITLE_LEN)?.takeIf(String::isNotEmpty) }?.take(MAX_LIST_ITEMS) ?: emptyList(),
+            format = e.format.orEmpty().take(32),
+            airingStatus = e.airingStatus.orEmpty().take(64),
+            sourceName = e.sourceName.orEmpty().take(64),
+            remoteIds = e.remoteIds.orEmpty().take(1024),
             providerScore = if (e.providerScore.isNaN()) 0f else e.providerScore.coerceIn(0f, 10f),
-            tags = (e.tags as List<String?>?)?.mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) } ?: emptyList()
+            tags = (e.tags as List<String?>?)?.mapNotNull { it?.trim()?.take(32)?.takeIf(String::isNotEmpty) }?.take(MAX_LIST_ITEMS) ?: emptyList(),
+            rewatchCount = e.rewatchCount.coerceIn(0, 1_000),
+            lastWatchedAt = e.lastWatchedAt.coerceAtLeast(0L)
         )
     }
 
     @Suppress("UselessCallOnNotNull")
     private fun sanitizeVault(v: HVaultEntry?): HVaultEntry? {
         if (v == null || v.id.isNullOrBlank() || v.title.isNullOrBlank()) return null
-        val total = v.totalEpisodes.coerceAtLeast(0)
-        val watched = if (total > 0) v.watchedEpisodes.coerceIn(0, total) else v.watchedEpisodes.coerceAtLeast(0)
+        val total = v.totalEpisodes.coerceIn(0, 50_000)
+        val watched = if (total > 0) v.watchedEpisodes.coerceIn(0, total) else v.watchedEpisodes.coerceIn(0, 50_000)
         return v.copy(
-            id = v.id.trim(),
-            title = v.title.trim(),
-            imageUrl = v.imageUrl.orEmpty(),
+            id = v.id.trim().take(MAX_ID_LEN),
+            title = v.title.trim().take(MAX_TITLE_LEN),
+            imageUrl = v.imageUrl.orEmpty().trim().take(MAX_URL_LEN),
             totalEpisodes = total,
             watchedEpisodes = watched,
             status = (v.status as WatchStatus?) ?: WatchStatus.PLAN_TO_WATCH,
             rating = if (v.rating.isNaN()) 0f else v.rating.coerceIn(0f, 10f),
-            tags = (v.tags as List<String?>?)?.mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) } ?: emptyList(),
-            notes = v.notes.orEmpty(),
-            durationMinutes = v.durationMinutes.coerceAtLeast(0)
+            studio = v.studio?.trim()?.take(128),
+            tags = (v.tags as List<String?>?)?.mapNotNull { it?.trim()?.take(32)?.takeIf(String::isNotEmpty) }?.take(MAX_LIST_ITEMS) ?: emptyList(),
+            notes = v.notes.orEmpty().take(MAX_NOTES_LEN),
+            durationMinutes = v.durationMinutes.coerceIn(0, 1_440)
         )
     }
 

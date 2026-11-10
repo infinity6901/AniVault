@@ -1,9 +1,13 @@
 package com.anivault.ui.library
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -24,9 +28,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -47,14 +53,15 @@ import com.anivault.data.local.model.WatchStatus
 import com.anivault.ui.common.*
 import com.anivault.ui.home.progressLabel
 import com.anivault.ui.theme.AniVaultColors
-import com.anivault.ui.theme.dim
 import com.anivault.ui.theme.TrackGlassOverlay
+import com.anivault.ui.theme.dim
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 import javax.inject.Inject
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 data class LibraryUi(
     val all: List<AnimeEntry> = emptyList(),
@@ -65,6 +72,7 @@ data class LibraryUi(
     val grid: Boolean = true,
     val gridDensity: String = "standard",
     val posterBadge: String = "rating",
+    val swipeGestures: Boolean = true,
     val smartLists: List<SmartListPreset> = emptyList(),
     val loaded: Boolean = false,
     val undo: List<AnimeEntry>? = null,
@@ -104,6 +112,7 @@ class LibraryViewModel @Inject constructor(
             grid = g,
             gridDensity = prefs.gridDensity,
             posterBadge = prefs.posterBadge,
+            swipeGestures = prefs.swipeGestures,
             smartLists = smartLists.value,
             loaded = true,
             undo = u,
@@ -175,6 +184,29 @@ class LibraryViewModel @Inject constructor(
     fun dismissUndo() { undo.value = null }
 }
 
+/**
+ * Theme-matched pill badge for grouped franchises (matches StatusChip styling and the active theme's primary/glass palette).
+ */
+@Composable
+fun SeasonBadgeChip(text: String, modifier: Modifier = Modifier) {
+    val c = MaterialTheme.colorScheme.primary
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f),
+        border = BorderStroke(1.dp, c.copy(alpha = 0.65f))
+    ) {
+        Row(
+            Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(Icons.Default.Layers, null, tint = c, modifier = Modifier.size(12.dp))
+            Text(text, color = c, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = hiltViewModel()) {
@@ -186,7 +218,7 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
     var confirmMove by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
     var grouped by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
-    var openGroup by remember { mutableStateOf<com.anivault.data.library.Franchise.Group?>(null) }
+    var openGroupKey by remember { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(ui.undo) {
@@ -206,6 +238,16 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
         else -> 112.dp
     }
 
+    val rows = remember(ui.shown, grouped) {
+        if (grouped) Franchise.group(ui.shown) else ui.shown.map { Franchise.Group(it.id, listOf(it)) }
+    }
+    // Keep openGroup reactive to live progress increments inside the Franchise sheet!
+    val activeGroup = remember(rows, ui.all, openGroupKey) {
+        openGroupKey?.let { k ->
+            Franchise.group(ui.all).firstOrNull { it.key == k } ?: rows.firstOrNull { it.key == k }
+        }
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
@@ -220,7 +262,7 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
                         Box {
                             IconButton(onClick = { statusMenu = true }) { Icon(Icons.Default.Edit, "Change status") }
                             DropdownMenu(statusMenu, { statusMenu = false }) {
-                            if (statusMenu) TrackGlassOverlay()
+                                if (statusMenu) TrackGlassOverlay()
                                 WatchStatus.values().forEach { s -> DropdownMenuItem({ Text(s.label) }, onClick = { statusMenu = false; viewModel.setStatus(s) }) }
                             }
                         }
@@ -244,7 +286,7 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
                         Box {
                             IconButton(onClick = { sortMenu = true }) { Icon(Icons.Default.Sort, "Sort") }
                             DropdownMenu(sortMenu, { sortMenu = false }) {
-                            if (sortMenu) TrackGlassOverlay()
+                                if (sortMenu) TrackGlassOverlay()
                                 LibrarySort.values().forEach { s ->
                                     DropdownMenuItem(
                                         { Text(s.label, fontWeight = if (s == ui.query.sort) FontWeight.Bold else FontWeight.Normal) },
@@ -262,115 +304,117 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
         }
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
-        val gridState = rememberLazyGridState()
-        val listState = rememberLazyListState()
-        val scope = rememberCoroutineScope()
-        val appCtx = androidx.compose.ui.platform.LocalContext.current.applicationContext
-        LaunchedEffect(ui.all.size) { com.anivault.ui.common.CoverCache.preload(appCtx, ui.all.map { it.imageUrl }) }
-        val rows = remember(ui.shown, grouped) {
-            if (grouped) com.anivault.data.library.Franchise.group(ui.shown) else ui.shown.map { com.anivault.data.library.Franchise.Group(it.id, listOf(it)) }
-        }
-        val header: @Composable () -> Unit = {
-            Column {
-                CompactSearch(ui.query.text, { t -> viewModel.setQuery { it.copy(text = t) } }, "Search your library", Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    item { FilterChip(grouped, { grouped = !grouped }, { Text("Group seasons", fontSize = 13.sp) }) }
-                    item { FilterChip(ui.query.status == null && ui.query.activeFilterCount == 0, { viewModel.setQuery { LibraryQuery(text = it.text, sort = it.sort) } }, { Text("All (${ui.all.size})", fontSize = 13.sp) }) }
-                    items(WatchStatus.values().toList()) { s ->
-                        val n = ui.all.count { it.status == s }
-                        FilterChip(ui.query.status == s && ui.query.activeFilterCount == 0, { viewModel.setQuery { it.copy(status = if (it.status == s) null else s) } }, { Text("${s.label} ($n)", fontSize = 13.sp) })
-                    }
-                    items(ui.smartLists, key = { "sl:${it.name}" }) { preset ->
-                        val active = preset.matches(ui.query)
-                        InputChip(
-                            selected = active,
-                            onClick = {
-                                viewModel.setQuery {
-                                    if (active) LibraryQuery(text = it.text, sort = it.sort) else preset.toQuery(it.sort).copy(text = it.text)
+            val gridState = rememberLazyGridState()
+            val listState = rememberLazyListState()
+            val scope = rememberCoroutineScope()
+            val appCtx = androidx.compose.ui.platform.LocalContext.current.applicationContext
+            LaunchedEffect(ui.all.size) { com.anivault.ui.common.CoverCache.preload(appCtx, ui.all.map { it.imageUrl }) }
+
+            val header: @Composable () -> Unit = {
+                Column {
+                    CompactSearch(ui.query.text, { t -> viewModel.setQuery { it.copy(text = t) } }, "Search your library", Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+                    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item {
+                            FilterChip(
+                                selected = grouped,
+                                onClick = { grouped = !grouped },
+                                leadingIcon = { Icon(Icons.Default.Layers, null, Modifier.size(16.dp)) },
+                                label = { Text("Group seasons", fontSize = 13.sp) }
+                            )
+                        }
+                        item { FilterChip(ui.query.status == null && ui.query.activeFilterCount == 0, { viewModel.setQuery { LibraryQuery(text = it.text, sort = it.sort) } }, { Text("All (${ui.all.size})", fontSize = 13.sp) }) }
+                        items(WatchStatus.values().toList()) { s ->
+                            val n = ui.all.count { it.status == s }
+                            FilterChip(ui.query.status == s && ui.query.activeFilterCount == 0, { viewModel.setQuery { it.copy(status = if (it.status == s) null else s) } }, { Text("${s.label} ($n)", fontSize = 13.sp) })
+                        }
+                        items(ui.smartLists, key = { "sl:${it.name}" }) { preset ->
+                            val active = preset.matches(ui.query)
+                            InputChip(
+                                selected = active,
+                                onClick = {
+                                    viewModel.setQuery {
+                                        if (active) LibraryQuery(text = it.text, sort = it.sort) else preset.toQuery(it.sort).copy(text = it.text)
+                                    }
+                                },
+                                label = { Text("★ ${preset.name}", fontSize = 12.sp) },
+                                trailingIcon = {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        "Remove smart list ${preset.name}",
+                                        Modifier.size(14.dp).combinedClickable(onClick = { viewModel.removeSmartList(preset) })
+                                    )
                                 }
-                            },
-                            label = { Text("★ ${preset.name}", fontSize = 12.sp) },
-                            trailingIcon = {
-                                Icon(
-                                    Icons.Default.Close,
-                                    "Remove smart list ${preset.name}",
-                                    Modifier.size(14.dp).combinedClickable(onClick = { viewModel.removeSmartList(preset) })
-                                )
-                            }
-                        )
+                            )
+                        }
                     }
+                    Spacer(Modifier.height(6.dp))
                 }
-                Spacer(Modifier.height(6.dp))
             }
-        }
-        Column(Modifier.fillMaxSize()) {
-            val listing = ui.loaded && ui.all.isNotEmpty() && ui.shown.isNotEmpty()
-            if (!listing) header()
-            when {
-                !ui.loaded -> LoadingBox()
-                ui.all.isEmpty() -> EmptyState("Your library is empty", "Add titles from Discover and they will appear here.", Icons.Default.VideoLibrary)
-                ui.shown.isEmpty() -> EmptyState(
-                    "No matches", "Nothing in your library fits these filters.", Icons.Default.SearchOff,
-                    action = "Clear filters", onAction = { viewModel.setQuery { LibraryQuery(sort = it.sort) } }
-                )
-                ui.grid -> LazyVerticalGrid(
-                    GridCells.Adaptive(cellMinWidth), state = gridState, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    item(key = "header", span = { GridItemSpan(maxLineSpan) }) { Box(Modifier.layout(fullBleed)) { header() } }
-                    items(rows, key = { it.key }) { g ->
-                        val e = g.lead
-                        Box {
+            Column(Modifier.fillMaxSize()) {
+                val listing = ui.loaded && ui.all.isNotEmpty() && ui.shown.isNotEmpty()
+                if (!listing) header()
+                when {
+                    !ui.loaded -> LoadingBox()
+                    ui.all.isEmpty() -> EmptyState("Your library is empty", "Add titles from Discover and they will appear here.", Icons.Default.VideoLibrary)
+                    ui.shown.isEmpty() -> EmptyState(
+                        "No matches", "Nothing in your library fits these filters.", Icons.Default.SearchOff,
+                        action = "Clear filters", onAction = { viewModel.setQuery { LibraryQuery(sort = it.sort) } }
+                    )
+                    ui.grid -> LazyVerticalGrid(
+                        GridCells.Adaptive(cellMinWidth), state = gridState, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 104.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        item(key = "header", span = { GridItemSpan(maxLineSpan) }) { Box(Modifier.layout(fullBleed)) { header() } }
+                        items(rows, key = { it.key }) { g ->
+                            val e = g.representative
                             GridItem(
                                 e = e,
+                                group = if (g.members.size > 1) g else null,
                                 selected = e.id in ui.selected,
                                 selecting = ui.selecting,
                                 badgeMode = ui.posterBadge,
-                                onClick = { if (g.members.size > 1) openGroup = g else if (ui.selecting) viewModel.toggleSelect(e.id) else onOpenEntry(e.id) },
-                                onLongClick = { if (g.members.size > 1) openGroup = g else viewModel.toggleSelect(e.id) }
+                                onClick = { if (g.members.size > 1) openGroupKey = g.key else if (ui.selecting) viewModel.toggleSelect(e.id) else onOpenEntry(e.id) },
+                                onLongClick = { if (g.members.size > 1) openGroupKey = g.key else viewModel.toggleSelect(e.id) }
                             )
-                            if (g.members.size > 1) Text("×${g.members.size}", Modifier.align(Alignment.TopEnd).padding(6.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 2.dp), color = MaterialTheme.colorScheme.onPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
-                }
-                else -> LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    item(key = "header") { header() }
-                    items(rows, key = { it.key }) { g ->
-                        val e = g.lead
-                        Box(Modifier.padding(horizontal = 16.dp)) {
-                            SwipeableLibraryRow(
-                                enabled = !ui.selecting && g.members.size == 1,
-                                onSwipeRightPlusOne = { viewModel.plusOne(e) },
-                                onSwipeLeftStatus = { viewModel.cycleStatus(e) }
-                            ) {
-                                ListItemRow(
-                                    e = e,
-                                    selected = e.id in ui.selected,
-                                    selecting = ui.selecting,
-                                    onClick = { if (g.members.size > 1) openGroup = g else if (ui.selecting) viewModel.toggleSelect(e.id) else onOpenEntry(e.id) },
-                                    onLongClick = { if (g.members.size > 1) openGroup = g else viewModel.toggleSelect(e.id) },
-                                    onPlusOne = if (!ui.selecting && g.members.size == 1 && (e.totalEpisodes == 0 || e.watchedEpisodes < e.totalEpisodes)) ({ viewModel.plusOne(e) }) else null
-                                )
+                    else -> LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 104.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item(key = "header") { header() }
+                        items(rows, key = { it.key }) { g ->
+                            val e = g.representative
+                            Box(Modifier.padding(horizontal = 16.dp)) {
+                                SwipeableLibraryRow(
+                                    enabled = ui.swipeGestures && !ui.selecting && g.members.size == 1,
+                                    onSwipeRightPlusOne = { viewModel.plusOne(e) },
+                                    onSwipeLeftStatus = { viewModel.cycleStatus(e) }
+                                ) {
+                                    ListItemRow(
+                                        e = e,
+                                        group = if (g.members.size > 1) g else null,
+                                        selected = e.id in ui.selected,
+                                        selecting = ui.selecting,
+                                        onClick = { if (g.members.size > 1) openGroupKey = g.key else if (ui.selecting) viewModel.toggleSelect(e.id) else onOpenEntry(e.id) },
+                                        onLongClick = { if (g.members.size > 1) openGroupKey = g.key else viewModel.toggleSelect(e.id) },
+                                        onPlusOne = if (!ui.selecting && (e.totalEpisodes == 0 || e.watchedEpisodes < e.totalEpisodes)) ({ viewModel.plusOne(e) }) else null
+                                    )
+                                }
                             }
-                            if (g.members.size > 1) Text("×${g.members.size} seasons", Modifier.align(Alignment.TopEnd).padding(6.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 2.dp), color = MaterialTheme.colorScheme.onPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             }
-        }
-        val past = if (ui.grid) gridState.firstVisibleItemIndex > 6 else listState.firstVisibleItemIndex > 3
-        ScrollToTop(past && ui.shown.isNotEmpty()) { scope.launch { if (ui.grid) gridState.animateScrollToItem(0) else listState.animateScrollToItem(0) } }
+            val past = if (ui.grid) gridState.firstVisibleItemIndex > 6 else listState.firstVisibleItemIndex > 3
+            ScrollToTop(past && ui.shown.isNotEmpty()) { scope.launch { if (ui.grid) gridState.animateScrollToItem(0) else listState.animateScrollToItem(0) } }
         }
     }
 
-    openGroup?.let { g ->
-        ModalBottomSheet(onDismissRequest = { openGroup = null }, containerColor = MaterialTheme.colorScheme.surface, scrimColor = Color.Black.copy(alpha = 0.62f)) {
-            TrackGlassOverlay()
-            Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(g.lead.title, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                g.members.sortedBy { it.year ?: 9999 }.forEach { m -> ListItemRow(m, false, false, { openGroup = null; onOpenEntry(m.id) }, { openGroup = null; onOpenEntry(m.id) }) }
-            }
-        }
+    activeGroup?.let { g ->
+        FranchiseGroupSheet(
+            group = g,
+            onOpenEntry = { id -> openGroupKey = null; onOpenEntry(id) },
+            onPlusOne = { e -> viewModel.plusOne(e) },
+            onDismiss = { openGroupKey = null }
+        )
     }
     if (confirmMove) ConfirmDialog(
         "Move ${ui.selected.size} ${if (ui.selected.size == 1) "title" else "titles"} to H-Vault?",
@@ -393,9 +437,89 @@ fun LibraryScreen(onOpenEntry: (String) -> Unit, viewModel: LibraryViewModel = h
 }
 
 /**
- * Horizontal swipe wrapper for list rows:
- *  - Swipe right (> 96px): +1 episode watched
- *  - Swipe left (< -96px): cycle status (Plan to Watch → Watching → Completed)
+ * Rich bottom sheet for a grouped multi-season franchise:
+ * shows the canonical franchise name, total episodes watched across all seasons,
+ * overall completion progress bar, and a chronological season timeline with inline +1 buttons.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FranchiseGroupSheet(
+    group: Franchise.Group,
+    onOpenEntry: (String) -> Unit,
+    onPlusOne: (AnimeEntry) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val members = group.orderedMembers
+    val totalEps = group.totalEpisodes
+    val watchedEps = group.watchedEpisodes
+    val rated = members.filter { it.rating > 0f }
+    val avgRating = if (rated.isNotEmpty()) rated.map { it.rating }.average().toFloat() else 0f
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        scrimColor = Color.Black.copy(alpha = 0.62f)
+    ) {
+        TrackGlassOverlay()
+        Column(
+            Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Poster(group.representative.imageUrl, Modifier.width(64.dp).height(92.dp), RoundedCornerShape(10.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(group.displayTitle, fontWeight = FontWeight.Bold, fontSize = 19.sp, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        "${group.completedSeasons} of ${members.size} seasons completed" +
+                            (if (totalEps > 0) " · $watchedEps / $totalEps eps" else " · $watchedEps eps watched"),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.dim
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        StatusChip(group.overallStatus)
+                        SeasonBadgeChip("${members.size} Seasons")
+                        if (avgRating > 0f) Tag("★ ${"%.1f".format(avgRating)}", MaterialTheme.colorScheme.primary)
+                    }
+                    if (totalEps > 0) {
+                        LinearProgressIndicator(
+                            progress = { (watchedEps.toFloat() / totalEps).coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth().padding(top = 2.dp).height(5.dp).clip(RoundedCornerShape(3.dp)),
+                            color = AniVaultColors.Progress,
+                            trackColor = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 2.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+            Text("Seasons & Entries (Chronological)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+
+            members.forEachIndexed { idx, m ->
+                val canPlus = m.totalEpisodes == 0 || m.watchedEpisodes < m.totalEpisodes
+                ListItemRow(
+                    e = m,
+                    group = null,
+                    seasonIndexBadge = "S${idx + 1}",
+                    selected = false,
+                    selecting = false,
+                    onClick = { onOpenEntry(m.id) },
+                    onLongClick = { onOpenEntry(m.id) },
+                    onPlusOne = if (canPlus) ({ onPlusOne(m) }) else null
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Scroll-safe horizontal swipe wrapper for list rows:
+ *  - Requires a deliberate horizontal gesture (`abs(dx) > 28.dp` AND `abs(dx) > abs(dy) * 2.6f` — under ~21° from horizontal)
+ *    before engaging, and immediately yields to vertical scrolling if vertical movement is detected first.
+ *  - Uses a density-aware commit threshold (`108.dp`) so casual or diagonal scrolling never triggers accidental swipes.
+ *  - Clipped strictly to the exposed horizontal gap `abs(animatedDragX)` so nothing bleeds behind translucent Liquid Glass cards.
  */
 @Composable
 fun SwipeableLibraryRow(
@@ -408,45 +532,122 @@ fun SwipeableLibraryRow(
         content()
         return
     }
-    var dragX by remember { mutableFloatStateOf(0f) }
-    val threshold = 140f
+    val density = LocalDensity.current
+    val deadZonePx = with(density) { 28.dp.toPx() }
+    val commitThresholdPx = with(density) { 108.dp.toPx() }
+    val maxDragPx = with(density) { 138.dp.toPx() }
+    val labelShowPx = with(density) { 58.dp.toPx() }
+
+    var rawDragX by remember { mutableFloatStateOf(0f) }
+    val animatedDragX by animateFloatAsState(
+        targetValue = rawDragX,
+        animationSpec = spring(dampingRatio = 0.82f, stiffness = 600f),
+        label = "row_swipe_offset"
+    )
+    val currentRight by rememberUpdatedState(onSwipeRightPlusOne)
+    val currentLeft by rememberUpdatedState(onSwipeLeftStatus)
+
     Box(
-        Modifier.fillMaxWidth().pointerInput(Unit) {
-            detectHorizontalDragGestures(
-                onDragEnd = {
-                    if (dragX > threshold) onSwipeRightPlusOne()
-                    else if (dragX < -threshold) onSwipeLeftStatus()
-                    dragX = 0f
-                },
-                onDragCancel = { dragX = 0f },
-                onHorizontalDrag = { change, amount ->
-                    change.consume()
-                    dragX = (dragX + amount).coerceIn(-220f, 220f)
+        Modifier.fillMaxWidth().pointerInput(deadZonePx, commitThresholdPx, maxDragPx) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                val pointerId = down.id
+                var totalDx = 0f
+                var totalDy = 0f
+                var lockedHorizontal = false
+                var rejectedVertical = false
+
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                    if (!change.pressed) break
+
+                    val dx = change.position.x - change.previousPosition.x
+                    val dy = change.position.y - change.previousPosition.y
+                    totalDx += dx
+                    totalDy += dy
+
+                    if (!lockedHorizontal && !rejectedVertical) {
+                        // If the user moves vertically or diagonally, immediately yield to LazyColumn vertical scroll!
+                        if (abs(totalDy) > viewConfiguration.touchSlop * 0.75f && abs(totalDy) * 2.2f >= abs(totalDx)) {
+                            rejectedVertical = true
+                            rawDragX = 0f
+                            break
+                        }
+                        // Only lock into horizontal swipe when movement is > 28dp AND strictly horizontal (ratio >= 2.6:1)
+                        if (abs(totalDx) >= deadZonePx && abs(totalDx) > abs(totalDy) * 2.6f) {
+                            lockedHorizontal = true
+                        }
+                    }
+
+                    if (lockedHorizontal) {
+                        change.consume()
+                        val effective = if (totalDx > 0f) (totalDx - deadZonePx).coerceAtLeast(0f)
+                        else (totalDx + deadZonePx).coerceAtMost(0f)
+                        // Apply gentle resistance past commitThresholdPx
+                        rawDragX = effective.coerceIn(-maxDragPx, maxDragPx)
+                    }
                 }
-            )
+
+                if (lockedHorizontal) {
+                    if (rawDragX >= commitThresholdPx) currentRight()
+                    else if (rawDragX <= -commitThresholdPx) currentLeft()
+                }
+                rawDragX = 0f
+            }
         }
     ) {
-        if (dragX > 24f) {
-            Row(
-                Modifier.matchParentSize().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)).padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
+        val armed = abs(animatedDragX) >= commitThresholdPx
+        if (animatedDragX > 6f) {
+            val revealWidth = with(density) { (animatedDragX - 4f).coerceAtLeast(0f).toDp() }
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .width(revealWidth)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(14.dp))
+                    .clipToBounds()
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = if (armed) 0.42f else 0.22f)),
+                contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Default.Add, null, tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(6.dp))
-                Text("+1 Episode", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
+                Row(
+                    Modifier.padding(horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(Icons.Default.Add, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    if (animatedDragX > labelShowPx) {
+                        Spacer(Modifier.width(4.dp))
+                        Text("+1 Ep", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, maxLines = 1)
+                    }
+                }
             }
-        } else if (dragX < -24f) {
-            Row(
-                Modifier.matchParentSize().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.22f)).padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.End
+        } else if (animatedDragX < -6f) {
+            val revealWidth = with(density) { (abs(animatedDragX) - 4f).coerceAtLeast(0f).toDp() }
+            Box(
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .width(revealWidth)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(14.dp))
+                    .clipToBounds()
+                    .background(MaterialTheme.colorScheme.tertiary.copy(alpha = if (armed) 0.42f else 0.22f)),
+                contentAlignment = Alignment.Center
             ) {
-                Text("Next Status", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.tertiary, fontSize = 13.sp)
-                Spacer(Modifier.width(6.dp))
-                Icon(Icons.Default.SwapHoriz, null, tint = MaterialTheme.colorScheme.tertiary)
+                Row(
+                    Modifier.padding(horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    if (animatedDragX < -labelShowPx) {
+                        Text("Status", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.tertiary, fontSize = 12.sp, maxLines = 1)
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Icon(Icons.Default.SwapHoriz, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(18.dp))
+                }
             }
         }
-        Box(Modifier.offset { IntOffset(dragX.roundToInt(), 0) }) {
+        Box(Modifier.offset { IntOffset(animatedDragX.roundToInt(), 0) }) {
             content()
         }
     }
@@ -456,21 +657,32 @@ fun SwipeableLibraryRow(
 @Composable
 private fun GridItem(
     e: AnimeEntry,
+    group: Franchise.Group? = null,
     selected: Boolean,
     selecting: Boolean,
     badgeMode: String = "rating",
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
+    val shownTitle = group?.displayTitle ?: e.title
+    val shownStatus = group?.overallStatus ?: e.status
+    val subText = if (group != null) {
+        val tot = group.totalEpisodes
+        if (tot > 0) "${group.members.size} seasons · ${group.watchedEpisodes}/$tot eps"
+        else "${group.members.size} seasons · ${group.watchedEpisodes} eps"
+    } else progressLabel(e)
+
     Column(
         Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .semantics { contentDescription = "${e.title}, ${e.status.label}, ${progressLabel(e)}${if (selected) ", selected" else ""}" }
+            .semantics { contentDescription = "$shownTitle, ${shownStatus.label}, $subText${if (selected) ", selected" else ""}" }
     ) {
         Box {
             Poster(e.imageUrl, Modifier.fillMaxWidth().aspectRatio(0.7f))
-            Box(Modifier.align(Alignment.TopStart).padding(6.dp)) { StatusChip(e.status) }
+            Box(Modifier.align(Alignment.TopStart).padding(6.dp)) { StatusChip(shownStatus) }
             if (selecting) {
                 Checkbox(selected, null, Modifier.align(Alignment.TopEnd).padding(2.dp).background(Color(0x990B0D16), RoundedCornerShape(6.dp)))
+            } else if (group != null) {
+                SeasonBadgeChip("${group.members.size}", Modifier.align(Alignment.BottomEnd).padding(6.dp))
             } else {
                 val badgeText = when (badgeMode) {
                     "rating" -> if (e.rating > 0f) "★ ${"%.1f".format(e.rating)}" else null
@@ -480,16 +692,17 @@ private fun GridItem(
                 if (badgeText != null) {
                     Surface(
                         shape = RoundedCornerShape(6.dp),
-                        color = Color(0xCC0B0D16),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f),
+                        border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
                         modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
                     ) {
-                        Text(badgeText, Modifier.padding(horizontal = 6.dp, vertical = 2.dp), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                        Text(badgeText, Modifier.padding(horizontal = 6.dp, vertical = 2.dp), color = MaterialTheme.colorScheme.onSurface, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
         }
-        Text(e.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp), color = MaterialTheme.colorScheme.onBackground)
-        Text(progressLabel(e), fontSize = 11.sp, color = MaterialTheme.colorScheme.dim)
+        Text(shownTitle, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp), color = MaterialTheme.colorScheme.onBackground)
+        Text(subText, fontSize = 11.sp, color = MaterialTheme.colorScheme.dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -497,37 +710,74 @@ private fun GridItem(
 @Composable
 private fun ListItemRow(
     e: AnimeEntry,
+    group: Franchise.Group? = null,
+    seasonIndexBadge: String? = null,
     selected: Boolean,
     selecting: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onPlusOne: (() -> Unit)? = null
 ) {
+    val shownTitle = group?.displayTitle ?: e.title
+    val shownStatus = group?.overallStatus ?: e.status
+    val totalEps = group?.totalEpisodes ?: e.totalEpisodes
+    val watchedEps = group?.watchedEpisodes ?: e.watchedEpisodes
+
+    val subtitle = if (group != null) {
+        val epPart = if (totalEps > 0) "Ep $watchedEps / $totalEps total" else "Ep $watchedEps watched"
+        val activePart = if (e.status == WatchStatus.WATCHING) " · Watching: ${e.title}" else " · ${group.completedSeasons}/${group.members.size} completed"
+        epPart + activePart
+    } else {
+        progressLabel(e) +
+            (if (e.rating > 0) "  ·  ★ ${"%.1f".format(e.rating)}" else "") +
+            (if (e.rewatchCount > 0) "  ·  ↻ ${e.rewatchCount}" else "")
+    }
+
     AniCard(Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             if (selecting) { Checkbox(selected, null); Spacer(Modifier.width(8.dp)) }
             Poster(e.imageUrl, Modifier.width(56.dp).height(80.dp), RoundedCornerShape(8.dp))
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(e.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
                 Text(
-                    progressLabel(e) +
-                        (if (e.rating > 0) "  ·  ★ ${"%.1f".format(e.rating)}" else "") +
-                        (if (e.rewatchCount > 0) "  ·  ↻ ${e.rewatchCount}" else ""),
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.dim
+                    shownTitle,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
-                StatusChip(e.status)
-                if (e.totalEpisodes > 0) LinearProgressIndicator(
-                    progress = { (e.watchedEpisodes.toFloat() / e.totalEpisodes).coerceIn(0f, 1f) },
+                Text(
+                    subtitle,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.dim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    StatusChip(shownStatus)
+                    if (group != null) {
+                        SeasonBadgeChip("${group.members.size} Seasons")
+                    } else if (seasonIndexBadge != null) {
+                        Tag(seasonIndexBadge, MaterialTheme.colorScheme.primary)
+                    }
+                    if (e.year != null && group == null) {
+                        Tag("${e.year}", MaterialTheme.colorScheme.dim)
+                    }
+                }
+                if (totalEps > 0) LinearProgressIndicator(
+                    progress = { (watchedEps.toFloat() / totalEps).coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
                     color = AniVaultColors.Progress, trackColor = MaterialTheme.colorScheme.outline
                 )
             }
             if (onPlusOne != null) {
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(8.dp))
                 FilledTonalIconButton(onClick = onPlusOne, modifier = Modifier.size(34.dp)) {
                     Icon(Icons.Default.Add, "Mark next episode of ${e.title} watched", Modifier.size(18.dp))
                 }
+            } else if (group != null) {
+                Spacer(Modifier.width(6.dp))
+                Icon(Icons.Default.ChevronRight, "Open seasons", tint = MaterialTheme.colorScheme.dim)
             }
         }
     }
