@@ -160,7 +160,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          ./gradlew --no-daemon --stacktrace -x lintVitalRelease -x lintVitalAnalyzeRelease :app:assembleRelease 2>&1 | tee "$DIAG_DIR/gradle-build-release.log"
+          ./gradlew --no-daemon --stacktrace :app:assembleRelease 2>&1 | tee "$DIAG_DIR/gradle-build-release.log"
           ls -l app/build/outputs/apk/release/
           for f in app/build/outputs/apk/release/app-*-release.apk; do
             abi="$(basename "$f" -release.apk)"; abi="${abi#app-}"
