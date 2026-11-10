@@ -206,16 +206,19 @@ object AniyomiAdaptiveParser {
 
         for (i in 0 until arr.length()) {
             val obj = arr.optJSONObject(i) ?: continue
-            val link = obj.optString("link").trim().ifBlank { continue }
+            val link = obj.optString("link").trim()
+            if (link.isEmpty()) continue
             val slug = obj.optString("slug").trim().ifBlank {
                 link.trimEnd('/').substringAfterLast("/")
-            }.ifBlank { continue }
+            }
+            if (slug.isEmpty()) continue
 
             val rawTitle = obj.optJSONObject("title")?.optString("rendered")
                 ?: obj.optString("title")
             val cleanTitle = Jsoup.parse(rawTitle).text().trim()
                 .replace(Regex("""\s*[-–|]\s*Watch\s+Hentai.*$""", RegexOption.IGNORE_CASE), "")
-                .ifBlank { continue }
+                
+            if (cleanTitle.isEmpty()) continue
 
             val coverUrl = extractWpFeaturedMedia(obj, baseUrl)
             if (coverUrl.isBlank()) continue
@@ -284,7 +287,8 @@ object AniyomiAdaptiveParser {
             val rawTitle = item.optString("title").trim()
             if (rawTitle.isBlank()) continue
             val cleanTitle = Jsoup.parse(rawTitle).text().trim()
-            val url = item.optString("url").trim().ifBlank { continue }
+            val url = item.optString("url").trim()
+            if (cleanTitle.isEmpty()) continue
             val rawImg = item.optString("img").trim()
             val cover = upgradeWordPressCoverUrl(rawImg, baseUrl)
             if (cover.isBlank()) continue
@@ -395,10 +399,14 @@ object AniyomiAdaptiveParser {
                     for (i in 0 until itemList.length()) {
                         val el = itemList.optJSONObject(i) ?: continue
                         val item = el.optJSONObject("item") ?: el
-                        val url = item.optString("url").trim().ifBlank { continue }
-                        val name = item.optString("name").trim().ifBlank { continue }
-                        val image = item.optString("image").trim().ifBlank { continue }
-                        val slug = url.trimEnd('/').substringAfterLast("/").ifBlank { continue }
+                        val url = item.optString("url").trim()
+            if (cleanTitle.isEmpty()) continue
+                        val name = item.optString("name").trim()
+            if (cleanTitle.isEmpty()) continue
+                        val image = item.optString("image").trim()
+            if (cleanTitle.isEmpty()) continue
+                        val slug = url.trimEnd('/').substringAfterLast("/")
+            if (cleanTitle.isEmpty()) continue
                         results += ScrapedEntry(
                             id = "watchhentai:$slug",
                             title = name,

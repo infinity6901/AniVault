@@ -346,3 +346,25 @@ fun Modifier.liquidGlassPanel(
         )
     }
 }
+
+/**
+ * Tracks active overlay surfaces (ModalBottomSheet, AlertDialog, DropdownMenu) so [AniVaultTheme]
+ * can blur the underlying viewport while any overlay is open.
+ */
+class GlassOverlayState {
+    var activeCount by mutableIntStateOf(0)
+        internal set
+}
+
+val LocalGlassOverlay = compositionLocalOf { GlassOverlayState() }
+
+@Composable
+fun TrackGlassOverlay() {
+    val state = LocalGlassOverlay.current
+    DisposableEffect(state) {
+        state.activeCount += 1
+        onDispose {
+            state.activeCount = (state.activeCount - 1).coerceAtLeast(0)
+        }
+    }
+}

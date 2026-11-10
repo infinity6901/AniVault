@@ -57,7 +57,8 @@ object HanimeAniyomiCodec {
             val obj = hitsArray.optJSONObject(i) ?: continue
             val slug = obj.optString("slug").trim().ifBlank { obj.optInt("id", 0).takeIf { it > 0 }?.toString().orEmpty() }
             if (slug.isBlank()) continue
-            val name = obj.optString("name").trim().ifBlank { continue }
+            val name = obj.optString("name").trim()
+            if (name.isEmpty()) continue
             val cover = obj.optString("cover_url").trim()
                 .ifBlank { obj.optString("poster_url").trim() }
             val brand = obj.optString("brand").trim().ifBlank { null }
