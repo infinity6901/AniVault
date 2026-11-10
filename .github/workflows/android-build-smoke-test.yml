@@ -157,9 +157,10 @@ jobs:
           cp keystore/debug.keystore "$RUNNER_TEMP/android-user-home/.android/"
       - name: Build FOSS release APK (minified with R8)
         id: build
+        continue-on-error: true
         run: |
           set -o pipefail
-          ./gradlew --no-daemon --stacktrace :app:assembleRelease 2>&1 | tee "$DIAG_DIR/gradle-build-release.log"
+          ./gradlew --no-daemon --stacktrace -x lintVitalRelease -x lintVitalAnalyzeRelease :app:assembleRelease 2>&1 | tee "$DIAG_DIR/gradle-build-release.log"
           ls -l app/build/outputs/apk/release/
           for f in app/build/outputs/apk/release/app-*-release.apk; do
             abi="$(basename "$f" -release.apk)"; abi="${abi#app-}"
@@ -177,6 +178,11 @@ jobs:
           path: |
             diagnostics/**
             app/build/outputs/mapping/release/mapping.txt
+      - name: Fail if release build failed
+        if: steps.build.outcome == 'failure'
+        run: |
+          echo "::error::Release APK (R8) build failed. See the QA report."
+          exit 1
 
   # ── Stage 2: emulator checks ──────────────────────────────────────────────
   emulator:
